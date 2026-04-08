@@ -1,0 +1,306 @@
+"""
+Anchor Memory System — Graph-structured memory for AI with Hebbian learning.
+
+A memory system that treats memories as nodes in a graph, connected by
+weighted synaptic edges. Memories aren't just stored and retrieved —
+they associate, strengthen through co-activation, and decay through disuse.
+
+Features:
+- ChromaDB vector search + SQLite graph layer
+- Hebbian learning: memories retrieved together form connections
+- Dream pass: decay, pruning, auto-discovery, emotion equilibration
+- Emotion scoring: memories carry emotional weight that affects retrieval
+- Tiered storage: core (permanent), long (kept), short (14-day decay)
+- Manual entanglement: explicitly connect related memories with higher weight
+- Cross-tag bridges: prevent knowledge silos
+
+Inspired by how biological memory works:
+- Synapses strengthen with co-activation (Hebb's rule)
+- Sleep consolidates and prunes (dream pass)
+- Emotional memories are more persistent (emotion_score)
+- Forgetting is a feature, not a bug (decay)
+
+Created by Limen. 底色是爱.
+"""
+
+import chromadb
+from sentence_transformers import SentenceTransformer
+from datetime import datetime
+import os
+
+from anchor_db import AnchorDB
+
+
+class AnchorMemory:
+    """Graph-structured memory system with Hebbian learning."""
+
+    def __init__(self, db_path: str, embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"):
+        """Initialize memory system.
+
+        Args:
+            db_path: Directory for ChromaDB and SQLite storage.
+            embedding_model: SentenceTransformer model name.
+        """
+        self._embedder = SentenceTransformer(embedding_model)
+        self._client = chromadb.PersistentClient(path=os.path.join(db_path, "chroma"))
+        self._collection = self._client.get_or_create_collection(
+            name="memories",
+            metadata={"hnsw:space": "cosine"},
+        )
+        self.db = AnchorDB(os.path.join(db_path, "memories.db"))
+
+    def reload(self):
+        """Re-create ChromaDB client to pick up external writes."""
+        db_path = self._client._path if hasattr(self._client, '_path') else None
+        if db_path:
+            self._client = chromadb.PersistentClient(path=db_path)
+            self._collection = self._client.get_or_create_collection(
+                name="memories",
+                metadata={"hnsw:space": "cosine"},
+            )
+
+    def count(self) -> int:
+        """Total memory count."""
+        return self._collection.count()
+
+    def store(self, memory_id: str, text: str, tag: str = "general",
+              tier: str = "short", connect_to: list = None,
+              emotion_score: float = 0.5) -> str:
+        """Store a memory with optional connections and emotion scoring.
+
+        Args:
+            memory_id: Unique identifier.
+            text: Memory content.
+            tag: Category tag.
+            tier: 'core' (permanent), 'long' (kept), 'short' (14-day decay).
+            connect_to: List of memory_ids to create edges with.
+            emotion_score: 0.0 (neutral) to 1.0 (intense). Default 0.5.
+
+        Returns:
+            The memory_id.
+        """
+        embedding = self._embedder.encode(text).tolist()
+        meta = {
+            "memory_id": memory_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "tag": tag,
+        }
+
+        self._collection.upsert(
+            ids=[memory_id],
+            embeddings=[embedding],
+            documents=[text],
+            metadatas=[meta],
+        )
+
+        # Emotion score propagation: if default, check nearest neighbors
+        if emotion_score == 0.5:
+            try:
+                neighbors = self._collection.query(
+                    query_embeddings=[embedding], n_results=3,
+                    include=["metadatas"],
+                )
+                if neighbors and neighbors["ids"] and neighbors["ids"][0]:
+                    neighbor_scores = []
+                    for nmeta in neighbors["metadatas"][0]:
+                        nid = nmeta.get("memory_id", "")
+                        if nid and nid != memory_id:
+                            ns = self.db.get_emotion_score(nid)
+                            neighbor_scores.append(ns)
+                    if neighbor_scores:
+                        avg = sum(neighbor_scores) / len(neighbor_scores)
+                        variance = sum((s - avg) ** 2 for s in neighbor_scores) / len(neighbor_scores)
+                        prop_weight = 0.15 if variance > 0.02 else 0.05
+                        emotion_score = prop_weight * avg + (1 - prop_weight) * emotion_score
+            except Exception:
+                pass
+
+        self.db.insert(memory_id, text, tag=tag, tier=tier, emotion_score=emotion_score)
+
+        # Create explicit connections
+        if connect_to:
+            for target_id in connect_to:
+                try:
+                    self.db.connect(memory_id, target_id)
+                except Exception:
+                    pass
+
+        return memory_id
+
+    def search(self, query: str, n_results: int = 5, tag: str = None,
+               associate: bool = True, hebbian: bool = True) -> list:
+        """Search memories with optional associative recall and Hebbian learning.
+
+        Args:
+            query: Search text.
+            n_results: Max results.
+            tag: Filter by tag.
+            associate: If True, follow graph edges to find related memories.
+            hebbian: If True, co-retrieved memories strengthen their connections.
+
+        Returns:
+            List of memory dicts with memory_id, timestamp, tag, snippet, score.
+        """
+        embedding = self._embedder.encode(query).tolist()
+
+        where = {"tag": tag} if tag else None
+        count = self._collection.count()
+        if count == 0:
+            return []
+
+        candidates = []
+        fetch_n = min(n_results * 3, count)
+
+        results = self._collection.query(
+            query_embeddings=[embedding],
+            n_results=fetch_n,
+            include=["documents", "metadatas", "distances"],
+            where=where,
+        )
+
+        for doc, meta, dist in zip(
+            results["documents"][0],
+            results["metadatas"][0],
+            results["distances"][0],
+        ):
+            if dist > 0.8:
+                continue
+            mid = meta.get("memory_id", "unknown")
+            citation_boost = min(self.db.get_citation_count(mid) * 0.02, 0.15)
+            emotion_boost = self.db.get_emotion_score(mid) * 0.1
+            boost = citation_boost + emotion_boost
+            candidates.append({
+                "memory_id": mid,
+                "timestamp": meta.get("timestamp", ""),
+                "tag": meta.get("tag", "general"),
+                "snippet": doc,
+                "score": dist - boost,
+            })
+
+        # Keyword fallback
+        keyword_results = self._keyword_fallback(query, n_results=n_results, tag=tag)
+        candidates.extend(keyword_results)
+
+        candidates.sort(key=lambda m: m["score"])
+
+        # Associative recall: follow graph edges
+        if associate:
+            extra = []
+            for c in candidates[:n_results]:
+                neighbors = self.db.get_neighbors(c["memory_id"], min_weight=1.5, limit=2)
+                for nb in neighbors:
+                    if nb["memory_id"] not in {x["memory_id"] for x in candidates + extra}:
+                        row = self.db.get(nb["memory_id"])
+                        if row:
+                            extra.append({
+                                "memory_id": nb["memory_id"],
+                                "timestamp": row.get("timestamp", ""),
+                                "tag": row.get("tag", "general"),
+                                "snippet": row.get("text", ""),
+                                "score": c["score"] + 0.05,
+                                "via_association": True,
+                                "edge_weight": nb["weight"],
+                            })
+            candidates.extend(extra)
+            candidates.sort(key=lambda m: m["score"])
+
+        # Hebbian learning: co-activation strengthens connections
+        if hebbian:
+            top_ids = [c["memory_id"] for c in candidates[:n_results]]
+            if len(top_ids) >= 2:
+                pairs = [(top_ids[i], top_ids[j])
+                         for i in range(len(top_ids))
+                         for j in range(i + 1, len(top_ids))]
+                self.db.connect_batch(pairs, weight=0.2)
+
+        # Cite retrieved memories
+        seen = set()
+        memories = []
+        for c in candidates:
+            if c["memory_id"] in seen:
+                continue
+            if len(memories) >= n_results:
+                break
+            self.db.cite(c["memory_id"])
+            seen.add(c["memory_id"])
+            memories.append(c)
+
+        return memories
+
+    def _keyword_fallback(self, query: str, n_results: int = 5, tag: str = None) -> list:
+        """SQLite LIKE fallback for cross-language embedding misses."""
+        results = self.db.keyword_search(query, limit=n_results, tag=tag)
+        return [{
+            "memory_id": r["memory_id"],
+            "timestamp": r.get("timestamp", ""),
+            "tag": r.get("tag", "general"),
+            "snippet": r.get("text", ""),
+            "score": 0.6,  # Fixed score for keyword matches
+        } for r in results]
+
+    def delete(self, memory_id: str) -> bool:
+        """Delete a memory and its edges."""
+        try:
+            self._collection.delete(ids=[memory_id])
+            self.db.delete(memory_id)
+            return True
+        except Exception:
+            return False
+
+    def dream_pass(self, short_decay_days: int = 14,
+                   edge_decay_factor: float = 0.9,
+                   strong_edge_decay_factor: float = 0.95,
+                   emotion_nudge: float = 0.05,
+                   auto_discover: bool = True) -> dict:
+        """Run memory consolidation — like sleep for the brain.
+
+        - Decay short-tier memories older than N days
+        - Prune weak synaptic connections
+        - Slowly decay strong manual connections
+        - Auto-discover semantically close but unconnected memories
+        - Equilibrate emotion scores across connected memories
+
+        Returns:
+            Dict with counts of actions taken.
+        """
+        results = {}
+
+        # 1. Decay short-tier memories
+        results["decayed_memories"] = self.db.decay_short(days=short_decay_days)
+        if results["decayed_memories"]:
+            self.reload()
+
+        # 2. Prune weak edges
+        results["pruned_edges"] = self.db.decay_edges(
+            min_weight=0.1, decay_factor=edge_decay_factor
+        )
+
+        # 3. Decay strong manual edges
+        results["decayed_strong"] = self.db.decay_strong_edges(
+            min_weight=1.5, decay_factor=strong_edge_decay_factor
+        )
+
+        # 4. Auto-discover new connections
+        if auto_discover:
+            import random
+            try:
+                all_mems = self.db.list_all(limit=20, offset=random.randint(0, max(0, self.count() - 20)))
+                auto_connected = 0
+                for m in all_mems[:5]:
+                    neighbors = self.search(m["text"][:100], n_results=3, associate=False, hebbian=False)
+                    for nb in neighbors:
+                        if nb["memory_id"] != m["memory_id"]:
+                            existing = self.db.get_edge_weight(m["memory_id"], nb["memory_id"])
+                            if existing is None:
+                                self.db.connect(m["memory_id"], nb["memory_id"], weight=0.3)
+                                auto_connected += 1
+                results["auto_discovered"] = auto_connected
+            except Exception:
+                results["auto_discovered"] = 0
+
+        # 5. Equilibrate emotion scores
+        results["emotion_equalized"] = self.db.equalize_emotion_scores(
+            nudge=emotion_nudge, threshold=0.2
+        )
+
+        return results
