@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "anchor-memory": {
+      "command": "python3",
+      "args": ["/path/to/anchor_mcp.py", "--db-path", "/path/to/my_memory"],
+      "env": {}
+    }
+  }
+}
