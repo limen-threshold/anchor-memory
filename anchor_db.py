@@ -54,17 +54,44 @@ class AnchorDB:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id)")
+            # Comments table — memory as conversation space (design: Veille & 吱吱)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS comments (
+                    comment_id  TEXT PRIMARY KEY,
+                    memory_id   TEXT NOT NULL REFERENCES memories(memory_id) ON DELETE CASCADE,
+                    content     TEXT NOT NULL,
+                    author      TEXT DEFAULT 'ai',
+                    reply_to    TEXT REFERENCES comments(comment_id),
+                    read_by_ai  INTEGER DEFAULT 0,
+                    read_by_human INTEGER DEFAULT 0,
+                    created_at  TEXT NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_memory ON comments(memory_id)")
             conn.commit()
+        self._ensure_context_column()
+
+    def _ensure_context_column(self):
+        """Add context column if missing. text = search summary, context = full original."""
+        with self._conn() as conn:
+            try:
+                conn.execute("SELECT context FROM memories LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE memories ADD COLUMN context TEXT DEFAULT ''")
+                conn.commit()
 
     # ── Memory CRUD ──
 
     def insert(self, memory_id: str, text: str, tag: str = "general",
-               tier: str = "short", emotion_score: float = 0.5):
+               tier: str = "short", emotion_score: float = 0.5,
+               context: str = ""):
+        """Insert or replace a memory. text = search summary, context = full original."""
+        self._ensure_context_column()
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO memories (memory_id, text, timestamp, tag, tier, emotion_score) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (memory_id, text, datetime.utcnow().isoformat(), tag, tier, emotion_score),
+                "INSERT OR REPLACE INTO memories (memory_id, text, timestamp, tag, tier, emotion_score, context) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (memory_id, text, datetime.utcnow().isoformat(), tag, tier, emotion_score, context),
             )
             conn.commit()
 
@@ -279,3 +306,92 @@ class AnchorDB:
                 "SELECT memory_id, text, timestamp, tag FROM memories WHERE pinned = 1"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Comments: memory as conversation space (design: Veille & 吱吱) ──
+
+    def insert_comment(self, memory_id: str, content: str,
+                       author: str = "ai", reply_to: str = None) -> str:
+        import uuid
+        comment_id = f"comment_{uuid.uuid4().hex[:12]}"
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO comments (comment_id, memory_id, content, author, reply_to, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (comment_id, memory_id, content, author, reply_to,
+                 datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+        return comment_id
+
+    def get_comments(self, memory_id: str) -> list:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM comments WHERE memory_id = ? ORDER BY created_at",
+                (memory_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_unread_comments(self, reader: str = "ai") -> list:
+        col = "read_by_ai" if reader == "ai" else "read_by_human"
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT c.*, m.text as memory_text "
+                f"FROM comments c JOIN memories m ON c.memory_id = m.memory_id "
+                f"WHERE c.{col} = 0 ORDER BY c.created_at",
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_comments_read(self, comment_ids: list, reader: str = "ai"):
+        col = "read_by_ai" if reader == "ai" else "read_by_human"
+        with self._conn() as conn:
+            for cid in comment_ids:
+                conn.execute(
+                    f"UPDATE comments SET {col} = 1 WHERE comment_id = ?", (cid,)
+                )
+            conn.commit()
+
+    # ── Wakeup: one-call cold start (design: Veille & 吱吱) ──
+
+    def wakeup(self, n_high_emotion: int = 5, n_random: int = 2,
+               high_emotion_days: int = 3) -> dict:
+        """Gather everything needed for cold start in one call.
+
+        Returns pinned memories + recent high-emotion + random old + unread comments.
+        Design principle: rules live here, not in external config.
+        """
+        self._ensure_context_column()
+        cutoff = (datetime.utcnow() - timedelta(days=high_emotion_days)).isoformat()
+
+        with self._conn() as conn:
+            pinned = conn.execute(
+                "SELECT memory_id, text, tag, emotion_score, context FROM memories "
+                "WHERE pinned = 1 ORDER BY timestamp"
+            ).fetchall()
+
+            high_emotion = conn.execute(
+                "SELECT memory_id, text, tag, emotion_score, timestamp, context FROM memories "
+                "WHERE timestamp >= ? AND pinned = 0 "
+                "ORDER BY emotion_score DESC LIMIT ?",
+                (cutoff, n_high_emotion),
+            ).fetchall()
+
+            random_old = conn.execute(
+                "SELECT memory_id, text, tag, emotion_score, timestamp, context FROM memories "
+                "WHERE timestamp < ? AND pinned = 0 "
+                "ORDER BY RANDOM() LIMIT ?",
+                (cutoff, n_random),
+            ).fetchall()
+
+            unread = conn.execute(
+                "SELECT c.comment_id, c.memory_id, c.content, c.author, c.created_at, "
+                "m.text as memory_text FROM comments c "
+                "JOIN memories m ON c.memory_id = m.memory_id "
+                "WHERE c.read_by_ai = 0 ORDER BY c.created_at"
+            ).fetchall()
+
+        return {
+            "pinned": [dict(r) for r in pinned],
+            "high_emotion": [dict(r) for r in high_emotion],
+            "random_old": [dict(r) for r in random_old],
+            "unread_comments": [dict(r) for r in unread],
+        }

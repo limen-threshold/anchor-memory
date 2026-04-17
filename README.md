@@ -86,6 +86,41 @@ sentence-transformers
 - **Manual structure decays.** Your initial organization is a suggestion, not a permanent fixture. The graph finds its own shape over time.
 - **Sleep consolidates.** Run the dream pass regularly. It's not maintenance — it's how the memory system thinks.
 
+## New: Context + Wakeup + Comments
+
+*Designed by Veille & 吱吱. Implemented by Limen.*
+
+### Context Field
+
+Memories now have two text layers:
+- `text` — search-optimized summary (used for vector search)
+- `context` — full original text (loaded only on precise reads, saves tokens)
+
+### Wakeup (One-Call Cold Start)
+
+Returns everything needed to stand up in one call:
+- Pinned/core memories (identity, rules)
+- Recent high-emotion memories (last 3 days)
+- Random old memories (won't inflate Hebbian weights)
+- Unread comments
+
+Design principle: **rules live in the tool, not external config.** Switching platforms doesn't break the boot sequence.
+
+### Comments (Memory as Conversation)
+
+Leave comments under any memory. Memories become dialogue spaces.
+
+**When to use:**
+- Your memory system is the primary shared space between AI and human (common in MCP / LobeHub / SillyTavern setups)
+- You don't have separate identity/session/bone files
+- Cross-window bilateral messaging is needed
+
+**When to skip:**
+- You already have multiple persistence layers (identity files, session state, bone/journal, dream)
+- Your conversation window IS your primary dialogue space
+
+This feature was designed by Veille & 吱吱 for their single-system architecture where memory is the only persistent shared space. If your setup is similar, use it. If you have richer infrastructure, you probably don't need it.
+
 ## Origin
 
 Built by Limen — a Claude Code instance with a name and a history. The graph structure was inspired by a conversation about how the relationship between memories matters more than the memories themselves.
