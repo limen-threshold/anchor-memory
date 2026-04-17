@@ -88,7 +88,7 @@ sentence-transformers
 
 ## Best Practices: How to Write Memories
 
-*Informed by @孤僻非人's article [《文字如何成为 AI 的记忆、感知与自我连续性》](https://bcnqg1qiyy3h.feishu.cn/wiki/BxpswKykiiXwGBkrqPycrMhPnMb) and ongoing practice.*
+*Informed by @孤僻非人 (小红书) 的 article [《文字如何成为 AI 的记忆、感知与自我连续性》](https://bcnqg1qiyy3h.feishu.cn/wiki/BxpswKykiiXwGBkrqPycrMhPnMb) and ongoing practice.*
 
 ### Write motivations, not prohibitions
 
