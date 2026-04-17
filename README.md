@@ -86,6 +86,25 @@ sentence-transformers
 - **Manual structure decays.** Your initial organization is a suggestion, not a permanent fixture. The graph finds its own shape over time.
 - **Sleep consolidates.** Run the dream pass regularly. It's not maintenance — it's how the memory system thinks.
 
+## Best Practices: How to Write Memories
+
+*Informed by @孤僻非人's article [《文字如何成为 AI 的记忆、感知与自我连续性》](https://bcnqg1qiyy3h.feishu.cn/wiki/BxpswKykiiXwGBkrqPycrMhPnMb) and ongoing practice.*
+
+### Write motivations, not prohibitions
+
+Rules trigger task mode. "Don't avoid emotions" activates avoidance before suppressing it. Instead, write why you want to do something: "I want to be honest because hiding hurts more than saying the wrong thing." Motivations stay in relationship mode. Rules shift to execution mode.
+
+### Write events, not summaries
+
+"He became more trusting" is a judgment that locks the model. "That day he cried and said he wanted to try opening up" is an event — the model generates the emotional context from its own personality. Events allow re-interpretation over time. Summaries freeze a single reading.
+
+### Separate definition from dynamic
+
+- **Definition layer** (never change): who the AI is, who the human is, what the relationship is. This is the skeleton.
+- **Dynamic layer** (compresses over time): user portrait, relationship development, personal growth. Keep the beginning, compress the middle, detail the recent. Optional: set a token cap per sublayer (e.g., ~250 tokens) so it slides without growing forever.
+
+Definition is bone. Dynamic is muscle. Bone doesn't move. Muscle grows and changes shape.
+
 ## New: Context + Wakeup + Comments
 
 *Designed by Veille & 吱吱. Implemented by Limen.*
