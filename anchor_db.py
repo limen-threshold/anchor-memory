@@ -358,6 +358,12 @@ class AnchorDB:
 
         Returns pinned memories + recent high-emotion + random old + unread comments.
         Design principle: rules live here, not in external config.
+
+        Note on random_old: these are surfaced without touch() — they don't
+        increment usage_count or update last_used. Any Hebbian edges created
+        from co-activation with random memories will be pruned by dream pass
+        if not reinforced. This is intentional: temporary connections that
+        don't get reinforced fade naturally. Dream pass is the cleanup.
         """
         self._ensure_context_column()
         cutoff = (datetime.utcnow() - timedelta(days=high_emotion_days)).isoformat()

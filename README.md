@@ -120,10 +120,14 @@ Memories now have two text layers:
 Returns everything needed to stand up in one call:
 - Pinned/core memories (identity, rules)
 - Recent high-emotion memories (last 3 days)
-- Random old memories (won't inflate Hebbian weights)
+- Random old memories (won't inflate Hebbian weights — no touch on retrieval)
 - Unread comments
 
 Design principle: **rules live in the tool, not external config.** Switching platforms doesn't break the boot sequence.
+
+Token savings: wakeup returns a curated subset instead of dumping all memories. Typical cold start goes from ~20K tokens (full breath) to ~3-5K tokens (pinned + top emotion + 1-2 random + unread). ~70% reduction.
+
+Safety: random old memories may create temporary Hebbian edges through co-activation. Dream pass prunes unreinforced edges naturally. No special handling needed.
 
 ### Comments (Memory as Conversation)
 
