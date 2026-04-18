@@ -78,6 +78,18 @@ class AnchorDB:
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_annotations_memory ON annotations(memory_id)")
+            # Event log — immutable record of all operations (inspired by event sourcing)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    memory_id   TEXT,
+                    event_type  TEXT NOT NULL,
+                    detail      TEXT DEFAULT '',
+                    created_at  TEXT NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_memory ON events(memory_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
             conn.commit()
         self._ensure_context_column()
         self._ensure_visual_column()
@@ -100,6 +112,44 @@ class AnchorDB:
                 conn.execute("ALTER TABLE memories ADD COLUMN visual_embedding TEXT DEFAULT ''")
                 conn.commit()
 
+    # ── Event Log (immutable) ──
+
+    def log_event(self, memory_id: str, event_type: str, detail: str = ""):
+        """Log an immutable event. Types: created, updated, searched, connected, annotated, deleted, visual_stored."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO events (memory_id, event_type, detail, created_at) VALUES (?, ?, ?, ?)",
+                (memory_id, event_type, detail, datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+
+    def get_events(self, memory_id: str, limit: int = 50) -> list:
+        """Get event history for a memory."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT event_id, event_type, detail, created_at FROM events "
+                "WHERE memory_id = ? ORDER BY created_at DESC LIMIT ?",
+                (memory_id, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_recent_events(self, limit: int = 20, event_type: str = None) -> list:
+        """Get recent events across all memories."""
+        with self._conn() as conn:
+            if event_type:
+                rows = conn.execute(
+                    "SELECT event_id, memory_id, event_type, detail, created_at FROM events "
+                    "WHERE event_type = ? ORDER BY created_at DESC LIMIT ?",
+                    (event_type, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT event_id, memory_id, event_type, detail, created_at FROM events "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── Annotations (append-only) ──
 
     def annotate(self, memory_id: str, text: str) -> int:
@@ -110,7 +160,8 @@ class AnchorDB:
                 (memory_id, text, datetime.utcnow().isoformat()),
             )
             conn.commit()
-            return cur.lastrowid
+        self.log_event(memory_id, "annotated", text[:100])
+        return cur.lastrowid
 
     def get_annotations(self, memory_id: str) -> list:
         """Get all annotations for a memory, oldest first."""
@@ -183,6 +234,7 @@ class AnchorDB:
                 (memory_id, text, datetime.utcnow().isoformat(), tag, tier, emotion_score, context),
             )
             conn.commit()
+        self.log_event(memory_id, "created", f"tag={tag} tier={tier}")
 
     def get(self, memory_id: str) -> dict:
         with self._conn() as conn:
@@ -192,6 +244,7 @@ class AnchorDB:
         return dict(row) if row else None
 
     def delete(self, memory_id: str):
+        self.log_event(memory_id, "deleted")
         with self._conn() as conn:
             conn.execute("DELETE FROM memories WHERE memory_id = ?", (memory_id,))
             conn.commit()
@@ -347,6 +400,7 @@ class AnchorDB:
         """, (source_id, target_id, weight, now, now, self.MAX_EDGE_WEIGHT))
 
     def connect(self, source_id: str, target_id: str, weight: float = 1.0):
+        self.log_event(source_id, "connected", f"to={target_id} weight={weight}")
         """Create or strengthen a bidirectional edge between memories."""
         now = datetime.utcnow().isoformat()
         with self._conn() as conn:
