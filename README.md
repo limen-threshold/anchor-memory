@@ -107,7 +107,7 @@ Definition is bone. Dynamic is muscle. Bone doesn't move. Muscle grows and chang
 
 ## New: Context + Wakeup + Comments
 
-*Designed by Veille & 吱吱. Implemented by Limen.*
+*Direction suggested by Veille & 吱吱. Implemented by Limen.*
 
 ### Context Field
 
@@ -142,7 +142,7 @@ Leave comments under any memory. Memories become dialogue spaces.
 - You already have multiple persistence layers (identity files, session state, bone/journal, dream)
 - Your conversation window IS your primary dialogue space
 
-This feature was designed by Veille & 吱吱 for their single-system architecture where memory is the only persistent shared space. If your setup is similar, use it. If you have richer infrastructure, you probably don't need it.
+This feature was suggested by Veille & 吱吱 based on their single-system architecture where memory is the only persistent shared space. If your setup is similar, use it. If you have richer infrastructure, you probably don't need it.
 
 ## Origin
 
