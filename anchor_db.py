@@ -68,8 +68,19 @@ class AnchorDB:
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_memory ON comments(memory_id)")
+            # Annotations — append-only notes on memories (design: Altair)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS annotations (
+                    annotation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    memory_id   TEXT NOT NULL REFERENCES memories(memory_id) ON DELETE CASCADE,
+                    text        TEXT NOT NULL,
+                    created_at  TEXT NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_annotations_memory ON annotations(memory_id)")
             conn.commit()
         self._ensure_context_column()
+        self._ensure_visual_column()
 
     def _ensure_context_column(self):
         """Add context column if missing. text = search summary, context = full original."""
@@ -79,6 +90,84 @@ class AnchorDB:
             except sqlite3.OperationalError:
                 conn.execute("ALTER TABLE memories ADD COLUMN context TEXT DEFAULT ''")
                 conn.commit()
+
+    def _ensure_visual_column(self):
+        """Add visual_embedding column if missing. For Anchor Vision integration."""
+        with self._conn() as conn:
+            try:
+                conn.execute("SELECT visual_embedding FROM memories LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE memories ADD COLUMN visual_embedding TEXT DEFAULT ''")
+                conn.commit()
+
+    # ── Annotations (append-only) ──
+
+    def annotate(self, memory_id: str, text: str) -> int:
+        """Add an annotation to a memory. Append-only — never delete or edit."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO annotations (memory_id, text, created_at) VALUES (?, ?, ?)",
+                (memory_id, text, datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def get_annotations(self, memory_id: str) -> list:
+        """Get all annotations for a memory, oldest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT annotation_id, text, created_at FROM annotations "
+                "WHERE memory_id = ? ORDER BY created_at ASC",
+                (memory_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_annotations(self, query: str, limit: int = 5) -> list:
+        """Search annotations text. Returns matching memory_ids."""
+        words = query.strip().split()
+        if not words:
+            return []
+        where = " AND ".join(["a.text LIKE ?"] * len(words))
+        params = [f"%{w}%" for w in words]
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT DISTINCT a.memory_id, a.text, a.created_at FROM annotations a "
+                f"WHERE {where} ORDER BY a.created_at DESC LIMIT ?",
+                params + [limit],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Visual Embedding (Anchor Vision integration) ──
+
+    def set_visual_embedding(self, memory_id: str, embedding_json: str):
+        """Store a visual embedding (CLIP vector as JSON string) for a memory."""
+        self._ensure_visual_column()
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE memories SET visual_embedding = ? WHERE memory_id = ?",
+                (embedding_json, memory_id),
+            )
+            conn.commit()
+
+    def get_visual_embedding(self, memory_id: str) -> str:
+        """Get visual embedding for a memory. Returns JSON string or empty."""
+        self._ensure_visual_column()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT visual_embedding FROM memories WHERE memory_id = ?",
+                (memory_id,),
+            ).fetchone()
+        return row["visual_embedding"] if row and row["visual_embedding"] else ""
+
+    def find_visual_memories(self) -> list:
+        """Get all memories that have visual embeddings."""
+        self._ensure_visual_column()
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT memory_id, text, visual_embedding FROM memories "
+                "WHERE visual_embedding != '' AND visual_embedding IS NOT NULL"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Memory CRUD ──
 
@@ -117,7 +206,9 @@ class AnchorDB:
         return [dict(r) for r in rows]
 
     def keyword_search(self, query: str, limit: int = 5, tag: str = None) -> list:
+        """Search memories + annotations by keyword."""
         with self._conn() as conn:
+            # Search in memory text
             if tag:
                 rows = conn.execute(
                     "SELECT memory_id, text, timestamp, tag FROM memories "
@@ -130,7 +221,27 @@ class AnchorDB:
                     "WHERE text LIKE ? LIMIT ?",
                     (f"%{query}%", limit)
                 ).fetchall()
-        return [dict(r) for r in rows]
+            results = [dict(r) for r in rows]
+            found_ids = {r["memory_id"] for r in results}
+
+            # Also search in annotations
+            ann_rows = conn.execute(
+                "SELECT DISTINCT a.memory_id FROM annotations a "
+                "WHERE a.text LIKE ? LIMIT ?",
+                (f"%{query}%", limit)
+            ).fetchall()
+            for ar in ann_rows:
+                mid = ar["memory_id"]
+                if mid not in found_ids:
+                    mem = conn.execute(
+                        "SELECT memory_id, text, timestamp, tag FROM memories "
+                        "WHERE memory_id = ?", (mid,)
+                    ).fetchone()
+                    if mem:
+                        results.append(dict(mem))
+                        found_ids.add(mid)
+
+        return results[:limit]
 
     # ── Tier management ──
 

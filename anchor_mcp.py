@@ -190,6 +190,46 @@ def create_server(db_path: str = "./anchor_data"):
                 "type": "object",
                 "properties": {}
             }
+        },
+        {
+            "name": "annotate_memory",
+            "description": "Add an annotation to a memory. Annotations are append-only — they record how understanding of a memory evolves over time. Searchable. Original memory text is never changed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "The memory to annotate."},
+                    "text": {"type": "string", "description": "The annotation text. E.g. '4/18: realized this was about X, not Y.'"}
+                },
+                "required": ["memory_id", "text"]
+            }
+        },
+        {
+            "name": "get_annotations",
+            "description": "Get all annotations for a memory, oldest first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "The memory to get annotations for."}
+                },
+                "required": ["memory_id"]
+            }
+        },
+        {
+            "name": "store_visual",
+            "description": "Store a visual observation as a memory with CLIP embedding. For Anchor Vision integration — lets the system remember what it has seen.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text description of what was seen. E.g. 'red earring, round, small'"},
+                    "visual_embedding": {"type": "string", "description": "CLIP embedding as JSON array string."},
+                    "tag": {"type": "string", "enum": ["visual", "general"], "description": "Tag. Use 'visual' for visual observations."},
+                    "connect_to": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Memory IDs to connect this observation to."
+                    }
+                },
+                "required": ["text"]
+            }
         }
     ]
 
@@ -263,6 +303,28 @@ def create_server(db_path: str = "./anchor_data"):
                     "tags": tags,
                     "tiers": tiers,
                 }
+
+            elif name == "annotate_memory":
+                aid = mem.db.annotate(args["memory_id"], args["text"])
+                return {"annotation_id": aid, "status": "annotated"}
+
+            elif name == "get_annotations":
+                anns = mem.db.get_annotations(args["memory_id"])
+                return {"annotations": anns}
+
+            elif name == "store_visual":
+                mid = f"vis_{uuid.uuid4().hex[:8]}"
+                mem.store(
+                    memory_id=mid,
+                    text=args["text"],
+                    tag=args.get("tag", "visual"),
+                    tier="long",
+                    emotion_score=0.3,
+                    connect_to=args.get("connect_to"),
+                )
+                if args.get("visual_embedding"):
+                    mem.db.set_visual_embedding(mid, args["visual_embedding"])
+                return {"memory_id": mid, "status": "stored"}
 
             else:
                 return {"error": f"Unknown tool: {name}"}
