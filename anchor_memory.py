@@ -238,6 +238,63 @@ class AnchorMemory:
             "score": 0.6,  # Fixed score for keyword matches
         } for r in results]
 
+    def consolidate(self, conversation_text: str, top_n: int = 10) -> dict:
+        """Passive Hebbian update — match conversation text against memory store,
+        build connections between memories that appeared in the same conversation
+        even if they weren't explicitly searched.
+
+        Args:
+            conversation_text: Summary or key topics from the conversation.
+            top_n: Max memories to match against.
+
+        Returns:
+            Dict with matched memory IDs and new connections made.
+        """
+        # Step 1: Local keyword matching (zero token cost)
+        words = conversation_text.strip().split()
+        matched_ids = set()
+
+        for word in words:
+            if len(word) < 2:
+                continue
+            results = self.db.keyword_search(word, limit=5)
+            for r in results:
+                matched_ids.add(r["memory_id"])
+
+        # Step 2: Embedding match for better coverage
+        if self._collection.count() > 0:
+            embedding = self._embedder.encode(conversation_text).tolist()
+            results = self._collection.query(
+                query_embeddings=[embedding],
+                n_results=min(top_n, self._collection.count()),
+                include=["metadatas", "distances"],
+            )
+            for meta, dist in zip(results["metadatas"][0], results["distances"][0]):
+                if dist < 0.6:  # Stricter threshold for passive matching
+                    matched_ids.add(meta.get("memory_id", ""))
+
+        matched_ids.discard("")
+        matched_list = list(matched_ids)
+
+        # Step 3: Hebbian update — all matched memories co-occurred
+        new_connections = 0
+        if len(matched_list) >= 2:
+            pairs = [(matched_list[i], matched_list[j])
+                     for i in range(len(matched_list))
+                     for j in range(i + 1, len(matched_list))]
+            self.db.connect_batch(pairs, weight=0.15)  # Lighter weight than search
+            new_connections = len(pairs)
+
+        # Log the consolidation event
+        for mid in matched_list:
+            self.db.log_event(mid, "consolidated", f"passive hebbian from conversation")
+
+        return {
+            "matched_memories": len(matched_list),
+            "memory_ids": matched_list,
+            "new_connections": new_connections,
+        }
+
     def delete(self, memory_id: str) -> bool:
         """Delete a memory and its edges."""
         try:

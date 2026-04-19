@@ -215,6 +215,20 @@ def create_server(db_path: str = "./anchor_data"):
             }
         },
         {
+            "name": "consolidate",
+            "description": "Passive Hebbian update — after a conversation, pass key topics to build connections between memories that co-occurred but weren't explicitly searched. Zero LLM token cost. Call at the end of a conversation or session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "conversation_text": {
+                        "type": "string",
+                        "description": "Key topics from the conversation. E.g. 'talked about her friend Lily, yesterday's dinner (ramen), the cockroach incident, her work project'"
+                    }
+                },
+                "required": ["conversation_text"]
+            }
+        },
+        {
             "name": "store_visual",
             "description": "Store a visual observation as a memory with CLIP embedding. For Anchor Vision integration — lets the system remember what it has seen.",
             "inputSchema": {
@@ -311,6 +325,10 @@ def create_server(db_path: str = "./anchor_data"):
             elif name == "get_annotations":
                 anns = mem.db.get_annotations(args["memory_id"])
                 return {"annotations": anns}
+
+            elif name == "consolidate":
+                result = mem.consolidate(args["conversation_text"])
+                return result
 
             elif name == "store_visual":
                 mid = f"vis_{uuid.uuid4().hex[:8]}"
