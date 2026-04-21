@@ -128,7 +128,8 @@ class AnchorMemory:
         return memory_id
 
     def search(self, query: str, n_results: int = 5, tag: str = None,
-               associate: bool = True, hebbian: bool = True) -> list:
+               associate: bool = True, hebbian: bool = True,
+               no_cite: bool = False, include_context: bool = False) -> list:
         """Search memories with optional associative recall and Hebbian learning.
 
         Args:
@@ -137,6 +138,8 @@ class AnchorMemory:
             tag: Filter by tag.
             associate: If True, follow graph edges to find related memories.
             hebbian: If True, co-retrieved memories strengthen their connections.
+            no_cite: If True, don't increment citation count. Use for browsing UI.
+            include_context: If True, include full original text in results.
 
         Returns:
             List of memory dicts with memory_id, timestamp, tag, snippet, score.
@@ -213,7 +216,7 @@ class AnchorMemory:
                          for j in range(i + 1, len(top_ids))]
                 self.db.connect_batch(pairs, weight=0.2)
 
-        # Cite retrieved memories
+        # Cite retrieved memories (skip if no_cite — for browsing, not recall)
         seen = set()
         memories = []
         for c in candidates:
@@ -221,7 +224,12 @@ class AnchorMemory:
                 continue
             if len(memories) >= n_results:
                 break
-            self.db.cite(c["memory_id"])
+            if not no_cite:
+                self.db.cite(c["memory_id"])
+            if include_context:
+                ctx = self.db.get_context(c["memory_id"])
+                if ctx:
+                    c["context"] = ctx
             seen.add(c["memory_id"])
             memories.append(c)
 

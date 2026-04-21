@@ -333,6 +333,15 @@ class AnchorDB:
 
     # ── Emotion scoring ──
 
+    def get_context(self, memory_id: str) -> str:
+        """Get the full context field for a memory."""
+        self._ensure_context_column()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT context FROM memories WHERE memory_id = ?", (memory_id,)
+            ).fetchone()
+        return row["context"] if row and row["context"] else ""
+
     def get_emotion_score(self, memory_id: str) -> float:
         with self._conn() as conn:
             row = conn.execute(
