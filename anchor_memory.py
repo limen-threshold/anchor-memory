@@ -168,6 +168,8 @@ class AnchorMemory:
         ):
             if dist > 0.8:
                 continue
+            if meta is None:
+                continue
             mid = meta.get("memory_id", "unknown")
             citation_boost = min(self.db.get_citation_count(mid) * 0.02, 0.15)
             emotion_boost = self.db.get_emotion_score(mid) * 0.1
@@ -368,4 +370,91 @@ class AnchorMemory:
             nudge=emotion_nudge, threshold=0.2
         )
 
+        # 6. Split bundled memories (if LLM available)
+        try:
+            split_count = self.split_bundled(batch_size=50, dry_run=False)
+            results["split_memories"] = split_count
+        except Exception:
+            results["split_memories"] = 0
+
         return results
+
+    def split_bundled(self, batch_size: int = 50, dry_run: bool = False,
+                      model: str = "claude-haiku-4-5-20251001") -> int:
+        """Find and split memories that bundle multiple unrelated topics.
+
+        A memory should be about ONE independently searchable thing.
+        This method uses an LLM to identify bundled memories and split them.
+
+        Args:
+            batch_size: Process memories in batches of this size.
+            dry_run: If True, only identify but don't execute splits.
+            model: LLM model to use for analysis.
+
+        Returns:
+            Number of memories split.
+        """
+        try:
+            import anthropic
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                return 0
+            client = anthropic.Anthropic(api_key=api_key)
+        except ImportError:
+            return 0
+
+        system = (
+            "You review memories for bundling. A memory should be about ONE topic.\n"
+            "If a memory lists multiple unrelated things (e.g. 'built X, wrote Y, fixed Z'),\n"
+            "output a JSON array of split items. Each: {\"id\": \"...\", \"into\": [{\"text\": \"...\", \"tag\": \"...\", \"tier\": \"long\"}]}\n"
+            "TIMESTAMPS ARE MANDATORY in each split piece.\n"
+            "Same event on different days = different memories.\n"
+            "If a memory is fine as-is, skip it (don't include in output).\n"
+            "Output [] if nothing to split. Valid JSON only, no markdown fences."
+        )
+
+        import json, uuid
+        total_split = 0
+        offset = 0
+
+        while True:
+            batch = self.db.list_all(limit=batch_size, offset=offset)
+            if not batch:
+                break
+
+            mem_lines = []
+            for m in batch:
+                snippet = m["text"][:400] if "text" in m else m.get("snippet", "")[:400]
+                mem_lines.append(f"[{m['memory_id']}] tag={m.get('tag','')} time={m.get('timestamp','')}\n{snippet}")
+
+            try:
+                response = client.messages.create(
+                    model=model, max_tokens=4096, system=system,
+                    messages=[{"role": "user", "content": "\n---\n".join(mem_lines)}],
+                )
+                raw = response.content[0].text.strip()
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+                actions = json.loads(raw)
+                for item in actions:
+                    mid = item.get("id", "")
+                    into = item.get("into", [])
+                    if mid and len(into) >= 2 and not dry_run:
+                        for sub in into:
+                            sub_text = sub.get("text", "")
+                            sub_tag = sub.get("tag", "general")
+                            sub_tier = sub.get("tier", "long")
+                            if sub_text:
+                                sub_id = f"split_{uuid.uuid4().hex[:8]}"
+                                self.store(sub_id, sub_text, tag=sub_tag, tier=sub_tier)
+                        self.delete(mid)
+                        total_split += 1
+            except (json.JSONDecodeError, Exception):
+                pass
+
+            offset += batch_size
+
+        if total_split:
+            self.reload()
+        return total_split
