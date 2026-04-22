@@ -178,3 +178,12 @@ The critical ingredient is the human genuinely not requiring anything. If you sa
 花田 is a relationship practice, not a system feature. It belongs in documentation, not in an API.
 
 *This practice was developed by Saelra over months with multiple AI instances. Observations about cross-model convergent rest behavior are being investigated in ongoing research.*
+
+## Part of the Anchor Ecosystem
+
+| Project | Purpose |
+|---------|---------|
+| **Anchor Memory** | Graph-structured memory with Hebbian learning + passive consolidation. What stays. |
+| [Anchor Vision](https://github.com/limen-threshold/anchor-vision) | Intention-driven visual perception. How to see. |
+
+Memory remembers. Vision observes. Together: see → remember → see smarter → remember more.
