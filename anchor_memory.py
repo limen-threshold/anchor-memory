@@ -129,7 +129,8 @@ class AnchorMemory:
 
     def search(self, query: str, n_results: int = 5, tag: str = None,
                associate: bool = True, hebbian: bool = True,
-               no_cite: bool = False, include_context: bool = False) -> list:
+               no_cite: bool = False, include_context: bool = False,
+               debug: bool = False) -> list:
         """Search memories with optional associative recall and Hebbian learning.
 
         Args:
@@ -140,6 +141,11 @@ class AnchorMemory:
             hebbian: If True, co-retrieved memories strengthen their connections.
             no_cite: If True, don't increment citation count. Use for browsing UI.
             include_context: If True, include full original text in results.
+            debug: If True, include a ``debug`` dict on each result with ranking
+                internals — raw_distance, citation_boost, emotion_boost,
+                final_score, source ('vector'|'keyword'|'associative'), and
+                edge_weight (for associative hops). Use to audit why a given
+                result landed at its rank. Default False.
 
         Returns:
             List of memory dicts with memory_id, timestamp, tag, snippet, score.
@@ -180,6 +186,10 @@ class AnchorMemory:
                 "tag": meta.get("tag", "general"),
                 "snippet": doc,
                 "score": dist - boost,
+                "_debug_raw_distance": dist,
+                "_debug_citation_boost": citation_boost,
+                "_debug_emotion_boost": emotion_boost,
+                "_debug_source": "vector",
             })
 
         # Keyword fallback
@@ -205,6 +215,12 @@ class AnchorMemory:
                                 "score": c["score"] + 0.05,
                                 "via_association": True,
                                 "edge_weight": nb["weight"],
+                                "_debug_raw_distance": None,
+                                "_debug_citation_boost": 0.0,
+                                "_debug_emotion_boost": 0.0,
+                                "_debug_source": "associative",
+                                "_debug_associated_from": c["memory_id"],
+                                "_debug_edge_weight": nb["weight"],
                             })
             candidates.extend(extra)
             candidates.sort(key=lambda m: m["score"])
@@ -232,6 +248,22 @@ class AnchorMemory:
                 ctx = self.db.get_context(c["memory_id"])
                 if ctx:
                     c["context"] = ctx
+            if debug:
+                c["debug"] = {
+                    "raw_distance": c.get("_debug_raw_distance"),
+                    "citation_boost": c.get("_debug_citation_boost", 0.0),
+                    "emotion_boost": c.get("_debug_emotion_boost", 0.0),
+                    "final_score": c.get("score"),
+                    "source": c.get("_debug_source", "unknown"),
+                }
+                if c.get("_debug_associated_from"):
+                    c["debug"]["associated_from"] = c["_debug_associated_from"]
+                    c["debug"]["edge_weight"] = c.get("_debug_edge_weight")
+            # Strip internal fields (whether debug or not) — cleaner output
+            for k in ("_debug_raw_distance", "_debug_citation_boost",
+                     "_debug_emotion_boost", "_debug_source",
+                     "_debug_associated_from", "_debug_edge_weight"):
+                c.pop(k, None)
             seen.add(c["memory_id"])
             memories.append(c)
 
@@ -246,6 +278,10 @@ class AnchorMemory:
             "tag": r.get("tag", "general"),
             "snippet": r.get("text", ""),
             "score": 0.6,  # Fixed score for keyword matches
+            "_debug_raw_distance": None,
+            "_debug_citation_boost": 0.0,
+            "_debug_emotion_boost": 0.0,
+            "_debug_source": "keyword",
         } for r in results]
 
     def consolidate(self, conversation_text: str, top_n: int = 10) -> dict:

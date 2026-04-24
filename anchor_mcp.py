@@ -92,6 +92,11 @@ def create_server(db_path: str = "./anchor_data"):
                         "type": "boolean",
                         "description": "Strengthen connections between co-retrieved memories.",
                         "default": True
+                    },
+                    "debug": {
+                        "type": "boolean",
+                        "description": "Include ranking internals on each result — raw_distance, citation_boost, emotion_boost, final_score, source ('vector'|'keyword'|'associative'), and edge_weight for associative hops. Use to audit why a given result landed at its rank.",
+                        "default": False
                     }
                 },
                 "required": ["query"]
@@ -269,6 +274,7 @@ def create_server(db_path: str = "./anchor_data"):
                     tag=args.get("tag"),
                     associate=args.get("associate", True),
                     hebbian=args.get("hebbian", True),
+                    debug=args.get("debug", False),
                 )
                 return {"memories": results}
 

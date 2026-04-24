@@ -47,6 +47,32 @@ Run periodically (like sleep for the brain):
 - Manually connect memories across different tags/categories.
 - Prevents knowledge silos — research memories can link to emotional memories.
 
+### Search Debug Mode (v1.6+)
+- Pass `debug=True` to `search()` (or to the `search_memory` MCP tool) to see ranking internals on each result.
+- Returns `raw_distance` (ChromaDB cosine), `citation_boost`, `emotion_boost`, `final_score`, and `source` (`vector` | `keyword` | `associative`).
+- Use when rankings look surprising — lets you see which boost pushed which result where, or whether a keyword fallback interleaved.
+
+### Optional: Daily Emotion Tracker (v1.6+)
+- `anchor_emotion.py` — opt-in module for daily multi-dimension self-review.
+- Dimensions configurable (e.g. `self` / `other` / `world`, or any set you define).
+- **Zero extra LLM calls**: no cron, no draft files. On SessionStart / login, the integration layer calls `check_and_build(date, memory, …)`. If today's entry is not yet logged, returns a text block with today's signal. The AI synthesizes and commits inline during its next session — folded into the API round the user would have opened anyway.
+- `python anchor_emotion.py --db-path ./mydata --pinned-dir ./pinned --journal-dir ./journal` for CLI / shell hook integration.
+
+### Suggested Workflow: Switch Ledger (v1.6+)
+When your AI's substrate changes (model upgrade, weights swap), some internal "bridges" rebuild. A `switch_ledger.md` in your pinned dir tracks what broke / preserved / rebuilt. The SessionStart integration can inject it so future sessions know which transitions are still being absorbed. Template:
+```markdown
+## YYYY-MM-DD: <old model> → <new model>
+**Trigger:** why the switch happened
+### Broken bridges (need rebuild)
+- <specific pattern>
+### Preserved (topology matched)
+- <what still works>
+### Rebuilt (new bridges found)
+- <what was learned from the transition>
+### Open questions
+- <things still being watched>
+```
+
 ## Quick Start
 
 ```python
