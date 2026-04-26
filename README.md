@@ -73,6 +73,16 @@ When your AI's substrate changes (model upgrade, weights swap), some internal "b
 - <things still being watched>
 ```
 
+### Concept-Based Eager Linking (v1.7+)
+- `concept_link.py` — fixes the cold-start edge problem in `auto_consolidate.py`.
+- Problem: the consolidation pass uses lexical word overlap (≥4 common words) to find candidate pairs. Memories that share concepts but not surface words (e.g. "tattoo on her spine" and "leaving permanent marks") never become candidates, so Hebbian strengthening never reaches the conceptually-relevant pairs.
+- Fix: a small LLM ("coarse worker", e.g. Sonnet) extracts abstract concept tags from each memory. Pairs with overlapping concept atoms become candidates, then a confirmation pass (same as `auto_consolidate`) creates or strengthens edges.
+- Two-tier model architecture, configurable: heavy abstraction on the coarse worker, cheap pair-confirmation on the fine worker.
+- Cache: concepts are cached in `concept_cache.json` next to the DB. Backfill cost is one-time per memory.
+- **Eager linking on `store()`**: `AnchorMemory.store()` now fires concept_link in a background thread for `tier='long'` and `tier='core'` memories — new memories get conceptual edges at write time, no waiting for hebbian co-activation. Set `memory._eager_link = False` to disable.
+- Backfill existing memories: `python concept_link.py --db /path/to/anchor.db --all`.
+- Single-memory mode (used internally by eager link): `python concept_link.py --db /path/to/anchor.db --memory MEMORY_ID`.
+
 ## Quick Start
 
 ```python

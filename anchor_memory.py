@@ -47,7 +47,11 @@ class AnchorMemory:
             name="memories",
             metadata={"hnsw:space": "cosine"},
         )
-        self.db = AnchorDB(os.path.join(db_path, "memories.db"))
+        self._db_path = os.path.join(db_path, "memories.db")
+        self.db = AnchorDB(self._db_path)
+        # Eager concept-based linking on store(). Set False to disable.
+        # Requires concept_link.py and an Anthropic API key (or a swapped client).
+        self._eager_link = True
 
     def reload(self):
         """Re-create ChromaDB client to pick up external writes."""
@@ -124,6 +128,20 @@ class AnchorMemory:
                     self.db.connect(memory_id, target_id)
                 except Exception:
                     pass
+
+        # Eager concept-based linking for long/core memories (fire-and-forget).
+        # Solves the cold-start edge problem: new memories get conceptual edges
+        # at write time instead of waiting for hebbian co-activation. Skipped
+        # for short tier (decays in 14 days, not worth the LLM cost).
+        if tier in ('long', 'core') and self._eager_link:
+            def _link():
+                try:
+                    import concept_link
+                    concept_link.run(self._db_path, scope='single', single_id=memory_id)
+                except Exception as e:
+                    print(f"[AnchorMemory] eager concept_link failed for {memory_id}: {e}")
+            import threading
+            threading.Thread(target=_link, daemon=True).start()
 
         return memory_id
 
