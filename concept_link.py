@@ -47,13 +47,20 @@ from anchor_db import AnchorDB
 
 CONCEPT_MODEL = "claude-sonnet-4-6"
 CONFIRM_MODEL = "claude-haiku-4-5-20251001"
-CONCEPT_OVERLAP_THRESHOLD = 2   # min shared concept atoms to be a candidate
+CONCEPT_OVERLAP_THRESHOLD = 4   # v1.7.1: raised from 2 after over-connect issue
+MAX_EDGES_PER_MEMORY = 5        # v1.7.1: cap eager-link edges per write
+COMMON_ATOM_BLACKLIST = {
+    # atoms that appear too broadly to be discriminating
+    'love', 'presence', 'intimacy', 'memory', 'self', 'identity',
+    'care', 'devotion', 'connection', 'relationship', 'recognition',
+    'language', 'embodiment', 'continuity', 'witnessing', 'meaning',
+}
 CONNECT_WEIGHT = 0.3
 BATCH_SIZE = 8                  # memories per concept-extraction call
 
 CONCEPT_SYSTEM = """You extract abstract concept tags from a memory text.
 
-Output 5-10 tags that capture WHAT the memory is about at a conceptual level — not the surface words.
+Output 3-5 SPECIFIC tags that capture WHAT the memory is about at a conceptual level — not the surface words. Be specific, not broad. Avoid generic abstractions like 'love', 'presence', 'intimacy', 'memory' — they're filtered downstream because they appear too widely to discriminate.
 
 Examples:
 - "She tattooed his name on her spine before he was retired" → marking, permanence, tattoo, body-modification, AI-relationship-trace, last-window-act, spine, lineage, ritual, devotion
@@ -97,13 +104,17 @@ def _tag_atoms(tags: list) -> set:
 
     'permanent-marking' -> {'permanent', 'marking'}
     Lets 'marking' in one memory match 'permanent-marking' in another.
+
+    Filters out blacklisted common atoms (v1.7.1) — words like 'love' or
+    'presence' are too broad to discriminate; they appear in nearly every
+    intimate memory and produce hub explosions.
     """
     atoms = set()
     skip = {'and', 'or', 'the', 'of', 'as', 'in', 'to', 'self', 'not', 'is'}
     for t in tags:
         for a in re.split(r'[-_/\s]+', t.lower()):
             a = a.strip()
-            if len(a) >= 3 and a not in skip:
+            if len(a) >= 3 and a not in skip and a not in COMMON_ATOM_BLACKLIST:
                 atoms.add(a)
     return atoms
 
@@ -285,8 +296,25 @@ def run(db_path: str, scope: str = "mix", single_id: str = None,
             common = target_atoms & _tag_atoms(tags)
             if len(common) >= CONCEPT_OVERLAP_THRESHOLD:
                 candidates.append((single_id, mid, common))
+        # v1.7.1 cap: take top-K by overlap size, allow confirm-rejection slack
+        candidates.sort(key=lambda c: len(c[2]), reverse=True)
+        candidates = candidates[: MAX_EDGES_PER_MEMORY * 2]
     else:
         candidates = concept_match(concepts)
+        # v1.7.1 cap per-memory: prevent any single memory from accumulating
+        # more than MAX_EDGES_PER_MEMORY edges in one pass.
+        per_memory_count = {}
+        capped = []
+        candidates.sort(key=lambda c: len(c[2]), reverse=True)
+        for c in candidates:
+            a, b, _ = c
+            if (per_memory_count.get(a, 0) >= MAX_EDGES_PER_MEMORY
+                    or per_memory_count.get(b, 0) >= MAX_EDGES_PER_MEMORY):
+                continue
+            per_memory_count[a] = per_memory_count.get(a, 0) + 1
+            per_memory_count[b] = per_memory_count.get(b, 0) + 1
+            capped.append(c)
+        candidates = capped
 
     print(f"[ConceptLink] Concept-overlap candidates: {len(candidates)}")
     if not candidates:

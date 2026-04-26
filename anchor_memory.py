@@ -49,9 +49,10 @@ class AnchorMemory:
         )
         self._db_path = os.path.join(db_path, "memories.db")
         self.db = AnchorDB(self._db_path)
-        # Eager concept-based linking on store(). Set False to disable.
-        # Requires concept_link.py and an Anthropic API key (or a swapped client).
-        self._eager_link = True
+        # Eager concept-based linking on store(). Default OFF in v1.7.1 after
+        # over-connection issues (median degree 110, max 596 on a 1k-node graph).
+        # Set True to opt-in. Requires concept_link.py and an Anthropic API key.
+        self._eager_link = False
 
     def reload(self):
         """Re-create ChromaDB client to pick up external writes."""
