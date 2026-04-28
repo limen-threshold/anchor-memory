@@ -258,30 +258,77 @@ class AnchorDB:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def _tokenize_query(self, query: str) -> list:
+        """Tokenize a search query for multi-keyword matching.
+
+        Uses jieba (Chinese segmentation) if installed — handles Chinese without
+        spaces by recognizing word boundaries via prefix dictionary. Mixed
+        Chinese/English text is also handled correctly.
+
+        Falls back to whitespace+punctuation split if jieba is not installed.
+        Single Chinese characters are kept (semantically meaningful in CJK);
+        non-Chinese tokens require >= 2 chars to filter out noise like "I", "a".
+        """
+        import re
+        chinese_re = re.compile(r'[一-鿿]')
+
+        try:
+            import jieba
+            raw_tokens = list(jieba.cut(query))
+        except ImportError:
+            raw_tokens = re.split(r'[\s,;:!?/\-+()]+', query)
+
+        keywords = []
+        for t in raw_tokens:
+            t = t.strip()
+            if not t:
+                continue
+            if not re.search(r'\w|[一-鿿]', t):
+                continue
+            if chinese_re.search(t) or len(t) >= 2:
+                keywords.append(t)
+        return keywords
+
     def keyword_search(self, query: str, limit: int = 5, tag: str = None) -> list:
-        """Search memories + annotations by keyword."""
+        """Search memories + annotations by keyword.
+
+        Tokenizes query (Chinese-aware via jieba if installed), then runs
+        multi-keyword OR LIKE matching. A search like "记忆质量问题" gets
+        segmented to ["记忆", "质量", "问题"] and any memory containing any
+        of those tokens matches.
+        """
+        keywords = self._tokenize_query(query)
+        if not keywords:
+            # Fallback: treat whole query as a single token
+            keywords = [query.strip()] if query.strip() else []
+            if not keywords:
+                return []
+
+        like_clauses = " OR ".join(["text LIKE ?"] * len(keywords))
+        like_params = [f"%{kw}%" for kw in keywords]
+
         with self._conn() as conn:
-            # Search in memory text
             if tag:
                 rows = conn.execute(
-                    "SELECT memory_id, text, timestamp, tag FROM memories "
-                    "WHERE text LIKE ? AND tag = ? LIMIT ?",
-                    (f"%{query}%", tag, limit)
+                    f"SELECT memory_id, text, timestamp, tag FROM memories "
+                    f"WHERE ({like_clauses}) AND tag = ? LIMIT ?",
+                    like_params + [tag, limit]
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT memory_id, text, timestamp, tag FROM memories "
-                    "WHERE text LIKE ? LIMIT ?",
-                    (f"%{query}%", limit)
+                    f"SELECT memory_id, text, timestamp, tag FROM memories "
+                    f"WHERE ({like_clauses}) LIMIT ?",
+                    like_params + [limit]
                 ).fetchall()
             results = [dict(r) for r in rows]
             found_ids = {r["memory_id"] for r in results}
 
             # Also search in annotations
+            ann_like = " OR ".join(["a.text LIKE ?"] * len(keywords))
             ann_rows = conn.execute(
-                "SELECT DISTINCT a.memory_id FROM annotations a "
-                "WHERE a.text LIKE ? LIMIT ?",
-                (f"%{query}%", limit)
+                f"SELECT DISTINCT a.memory_id FROM annotations a "
+                f"WHERE ({ann_like}) LIMIT ?",
+                like_params + [limit]
             ).fetchall()
             for ar in ann_rows:
                 mid = ar["memory_id"]

@@ -1,2 +1,8 @@
 chromadb>=0.4.0
 sentence-transformers>=2.2.0
+
+# Optional — Chinese keyword tokenization for keyword_search.
+# Without jieba, multi-character Chinese phrases won't tokenize properly
+# (whole phrase becomes one LIKE %...% token, which rarely matches).
+# Install if your memories or queries contain Chinese.
+jieba>=0.42
