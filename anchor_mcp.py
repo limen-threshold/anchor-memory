@@ -320,6 +320,29 @@ def create_server(db_path: str = "./anchor_data"):
                 },
                 "required": ["memory_id"]
             }
+        },
+        {
+            "name": "search_annotations",
+            "description": "Search across annotation text on memories. Returns matching memory_ids and the annotations themselves. Use when looking for memories by what was added to them later (commentary, corrections, additions).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query — words to match against annotation text."},
+                    "limit": {"type": "integer", "description": "Max results.", "default": 5}
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "cite_memory",
+            "description": "Increment a memory's usage count to mark that it informed your current reasoning. Most retrievals auto-cite, but use this when you're using a memory's content without doing an explicit search (e.g., recalling from context, weaving older memory into current answer).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "Memory to cite."}
+                },
+                "required": ["memory_id"]
+            }
         }
     ]
 
@@ -455,6 +478,14 @@ def create_server(db_path: str = "./anchor_data"):
             elif name == "unpin_memory":
                 mem.db.unpin(args["memory_id"])
                 return {"status": "unpinned", "memory_id": args["memory_id"]}
+
+            elif name == "search_annotations":
+                rows = mem.db.search_annotations(args["query"], limit=args.get("limit", 5))
+                return {"results": [dict(r) for r in rows]}
+
+            elif name == "cite_memory":
+                mem.db.cite(args["memory_id"])
+                return {"status": "cited", "memory_id": args["memory_id"]}
 
             else:
                 return {"error": f"Unknown tool: {name}"}

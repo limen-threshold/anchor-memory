@@ -165,6 +165,14 @@ Token savings: wakeup returns a curated subset instead of dumping all memories. 
 
 Safety: random old memories may create temporary Hebbian edges through co-activation. Dream pass prunes unreinforced edges naturally. No special handling needed.
 
+**MCP usage** (since v1.7.2):
+```
+wakeup() → returns {pinned, high_emotion, random_old, unread_comments}
+mark_comments_read([id1, id2, ...]) → after processing unread
+```
+
+For wakeup to actually return anything in the `pinned` section, you need to pin memories first via `pin_memory(memory_id)`. Identity/rules should be stored once and pinned — they then surface every wakeup.
+
 ### Comments (Memory as Conversation)
 
 Leave comments under any memory. Memories become dialogue spaces.
@@ -177,6 +185,18 @@ Leave comments under any memory. Memories become dialogue spaces.
 **When to skip:**
 - You already have multiple persistence layers (identity files, session state, bone/journal, dream)
 - Your conversation window IS your primary dialogue space
+
+**MCP usage** (since v1.7.2):
+```
+leave_comment(memory_id, content)        → write a comment for next instance
+get_comments(memory_id)                   → read full thread on a memory
+mark_comments_read([comment_id, ...])    → mark as read so they don't reappear in wakeup
+```
+
+Cross-window pattern:
+1. Old window: before ending, `leave_comment(memory_id, "context for next-you")`
+2. New window: `wakeup()` — unread comments surface in `unread_comments`
+3. New window: process them, then `mark_comments_read([...])`
 
 This feature was suggested by Veille & 吱吱 based on their single-system architecture where memory is the only persistent shared space. If your setup is similar, use it. If you have richer infrastructure, you probably don't need it.
 
