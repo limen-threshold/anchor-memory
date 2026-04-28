@@ -249,6 +249,77 @@ def create_server(db_path: str = "./anchor_data"):
                 },
                 "required": ["text"]
             }
+        },
+        {
+            "name": "wakeup",
+            "description": "One-call cold start. Returns pinned memories + recent high-emotion + random old + unread comments. Use at the start of a new conversation/window to ground context. Does NOT mark unread comments as read — call mark_comments_read separately after processing them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "n_high_emotion": {"type": "integer", "description": "How many recent high-emotion memories to return.", "default": 5},
+                    "n_random": {"type": "integer", "description": "How many random old memories to return.", "default": 2},
+                    "high_emotion_days": {"type": "integer", "description": "How many days back counts as 'recent'.", "default": 3}
+                }
+            }
+        },
+        {
+            "name": "leave_comment",
+            "description": "Leave a comment on a memory. The primary mechanism for cross-window messaging — comments left here will surface in the next instance's wakeup() call as unread. Useful for leaving context, decisions, or messages for future-you.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "Memory to attach comment to."},
+                    "content": {"type": "string", "description": "The comment text."},
+                    "author": {"type": "string", "enum": ["ai", "human"], "default": "ai", "description": "Who is leaving the comment."},
+                    "reply_to": {"type": "string", "description": "Optional: comment_id this is replying to."}
+                },
+                "required": ["memory_id", "content"]
+            }
+        },
+        {
+            "name": "get_comments",
+            "description": "Get all comments on a specific memory (both read and unread). Use this to read the full conversation thread on a memory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "Memory to fetch comments for."}
+                },
+                "required": ["memory_id"]
+            }
+        },
+        {
+            "name": "mark_comments_read",
+            "description": "Mark comments as read so they don't reappear in next wakeup. Call after processing the unread comments returned by wakeup().",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "comment_ids": {"type": "array", "items": {"type": "string"}, "description": "Comment IDs to mark as read."},
+                    "reader": {"type": "string", "enum": ["ai", "human"], "default": "ai", "description": "Who is marking as read."}
+                },
+                "required": ["comment_ids"]
+            }
+        },
+        {
+            "name": "pin_memory",
+            "description": "Pin a memory as core/identity-level. Pinned memories are returned first by wakeup() — use this for memories that should always be loaded at cold start (identity rules, key facts, important relationships).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "Memory to pin."}
+                },
+                "required": ["memory_id"]
+            }
+        },
+        {
+            "name": "unpin_memory",
+            "description": "Remove pinned status from a memory. The memory remains in storage but stops appearing in wakeup()'s pinned section.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "Memory to unpin."}
+                },
+                "required": ["memory_id"]
+            }
         }
     ]
 
@@ -350,6 +421,41 @@ def create_server(db_path: str = "./anchor_data"):
                     mem.db.set_visual_embedding(mid, args["visual_embedding"])
                 return {"memory_id": mid, "status": "stored"}
 
+            elif name == "wakeup":
+                return mem.db.wakeup(
+                    n_high_emotion=args.get("n_high_emotion", 5),
+                    n_random=args.get("n_random", 2),
+                    high_emotion_days=args.get("high_emotion_days", 3),
+                )
+
+            elif name == "leave_comment":
+                cid = mem.db.insert_comment(
+                    memory_id=args["memory_id"],
+                    content=args["content"],
+                    author=args.get("author", "ai"),
+                    reply_to=args.get("reply_to"),
+                )
+                return {"comment_id": cid, "status": "inserted"}
+
+            elif name == "get_comments":
+                rows = mem.db.get_comments(args["memory_id"])
+                return {"comments": [dict(r) for r in rows]}
+
+            elif name == "mark_comments_read":
+                mem.db.mark_comments_read(
+                    args["comment_ids"],
+                    reader=args.get("reader", "ai"),
+                )
+                return {"status": "marked", "count": len(args["comment_ids"])}
+
+            elif name == "pin_memory":
+                mem.db.pin(args["memory_id"])
+                return {"status": "pinned", "memory_id": args["memory_id"]}
+
+            elif name == "unpin_memory":
+                mem.db.unpin(args["memory_id"])
+                return {"status": "unpinned", "memory_id": args["memory_id"]}
+
             else:
                 return {"error": f"Unknown tool: {name}"}
 
@@ -391,7 +497,7 @@ def run_stdio(db_path: str):
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "anchor-memory",
-                        "version": "1.0.0",
+                        "version": "1.7.2",
                     }
                 }
             })
