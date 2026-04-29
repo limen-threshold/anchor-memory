@@ -16,6 +16,13 @@ import uuid
 import argparse
 from datetime import datetime
 
+# Windows fix: force UTF-8 on stdin/stdout to prevent GBK encoding issues
+# (Windows cmd defaults to GBK; mcp_proxy communicates in UTF-8)
+if sys.platform == "win32" or (hasattr(sys.stdout, 'buffer') and sys.stdout.encoding and sys.stdout.encoding.upper() != 'UTF-8'):
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
+
 # Add parent dir to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
 
