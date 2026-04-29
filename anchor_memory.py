@@ -84,6 +84,9 @@ class AnchorMemory:
         Returns:
             The memory_id.
         """
+        text = str(text).strip() if text is not None else ""
+        if not text:
+            raise ValueError("Memory text cannot be empty")
         embedding = self._embedder.encode(text).tolist()
         meta = {
             "memory_id": memory_id,
