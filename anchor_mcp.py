@@ -535,7 +535,7 @@ def run_stdio(db_path: str):
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "anchor-memory",
-                        "version": "1.7.2",
+                        "version": "1.8",
                     }
                 }
             })

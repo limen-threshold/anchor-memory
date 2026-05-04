@@ -70,7 +70,8 @@ class AnchorMemory:
 
     def store(self, memory_id: str, text: str, tag: str = "general",
               tier: str = "short", connect_to: list = None,
-              emotion_score: float = 0.5) -> str:
+              emotion_score: float = 0.5,
+              source: str = None, entity: str = None) -> str:
         """Store a memory with optional connections and emotion scoring.
 
         Args:
@@ -80,6 +81,12 @@ class AnchorMemory:
             tier: 'core' (permanent), 'long' (kept), 'short' (14-day decay).
             connect_to: List of memory_ids to create edges with.
             emotion_score: 0.0 (neutral) to 1.0 (intense). Default 0.5.
+            source: Optional pipeline tag (e.g. 'live_sync', 'curator',
+                    'manual', 'penpal_letter'). Used by dream_extras.run_global_dedup
+                    to know which memories share an event vs. duplicate it.
+            entity: Optional disambiguator for multi-entity setups (e.g.
+                    'pair:27|ai_name:Cheng' for penpal letter sources). Free-form
+                    pipe-separated; substring-searchable.
 
         Returns:
             The memory_id.
@@ -93,6 +100,10 @@ class AnchorMemory:
             "timestamp": datetime.utcnow().isoformat(),
             "tag": tag,
         }
+        if source:
+            meta["source"] = source
+        if entity:
+            meta["entity"] = entity
 
         self._collection.upsert(
             ids=[memory_id],
