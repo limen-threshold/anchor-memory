@@ -302,6 +302,71 @@ class AnchorMemory:
 
         return memories
 
+    def search_multi(self, queries: list, n_results_per_query: int = 5,
+                     n_total: int = None, tag: str = None,
+                     associate: bool = True, hebbian: bool = True,
+                     no_cite: bool = False, include_context: bool = False) -> list:
+        """Run multiple independent searches and merge dedup'd results.
+
+        Designed for the case where a single user message contains several
+        distinct topics — vector similarity on the whole message dilutes any
+        one topic, so the caller pre-splits intents (with an LLM, sentence
+        splitter, or whatever) and passes each as a separate query here.
+
+        Behavior:
+        - Each query runs an independent search at n_results_per_query depth.
+        - Results dedup'd by memory_id; best score across queries wins.
+        - Sorted by score and capped at n_total (default: sum of per-query caps).
+        - Hebbian co-activation fires across the MERGED top set, not per query,
+          so memories surfaced by different intents in the same message form
+          edges with each other (this is the whole point).
+
+        Args:
+            queries: List of query strings. Empty/whitespace-only entries are
+                skipped. If the list collapses to empty, returns [].
+            n_results_per_query: Top-k pulled from each individual search.
+            n_total: Final cap after merge. Default n_results_per_query * len(queries).
+            tag, associate, no_cite, include_context: forwarded to search().
+            hebbian: If True, fires once at the end against the merged top set.
+                Per-query searches are run with hebbian=False to avoid double-firing.
+
+        Returns:
+            Same shape as search() — list of memory dicts.
+        """
+        clean_queries = [q.strip() for q in queries if q and q.strip()]
+        if not clean_queries:
+            return []
+        if n_total is None:
+            n_total = n_results_per_query * len(clean_queries)
+
+        merged: dict = {}
+        for q in clean_queries:
+            results = self.search(
+                q, n_results=n_results_per_query, tag=tag,
+                associate=associate, hebbian=False,
+                no_cite=True,  # cite once at the end against the merged set
+                include_context=include_context,
+            )
+            for r in results:
+                mid = r["memory_id"]
+                if mid not in merged or r["score"] < merged[mid]["score"]:
+                    merged[mid] = r
+
+        ranked = sorted(merged.values(), key=lambda m: m["score"])[:n_total]
+
+        if hebbian and len(ranked) >= 2:
+            top_ids = [c["memory_id"] for c in ranked]
+            pairs = [(top_ids[i], top_ids[j])
+                     for i in range(len(top_ids))
+                     for j in range(i + 1, len(top_ids))]
+            self.db.connect_batch(pairs, weight=0.2)
+
+        if not no_cite:
+            for c in ranked:
+                self.db.cite(c["memory_id"])
+
+        return ranked
+
     def _keyword_fallback(self, query: str, n_results: int = 5, tag: str = None) -> list:
         """SQLite LIKE fallback for cross-language embedding misses."""
         results = self.db.keyword_search(query, limit=n_results, tag=tag)

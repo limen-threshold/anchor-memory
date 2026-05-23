@@ -110,6 +110,34 @@ def create_server(db_path: str = "./anchor_data"):
             }
         },
         {
+            "name": "search_multi",
+            "description": "Run multiple independent searches and merge results. Use when a single user message contains several distinct topics — vector similarity on the whole message dilutes any one topic, so you pre-split the message into intent strings and pass them here. Each intent searches separately at depth, then results are merged and dedup'd by memory_id. Hebbian co-activation fires across the merged set, so memories surfaced by different intents in the same message form edges with each other.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "queries": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of intent strings to search. Example: for the message '七月去欧洲要不要换4K拍摄', pass ['七月欧洲行', '4K拍摄设置']."
+                    },
+                    "n_results_per_query": {
+                        "type": "integer",
+                        "description": "Top-k pulled from each individual search.",
+                        "default": 5
+                    },
+                    "n_total": {
+                        "type": "integer",
+                        "description": "Final cap after merge. Default n_results_per_query * len(queries)."
+                    },
+                    "tag": {"type": "string"},
+                    "associate": {"type": "boolean", "default": True},
+                    "hebbian": {"type": "boolean", "default": True},
+                    "include_context": {"type": "boolean", "default": False}
+                },
+                "required": ["queries"]
+            }
+        },
+        {
             "name": "connect_memories",
             "description": "Explicitly connect two memories. Creates a weighted bidirectional edge (synapse). Use for manual entanglement — connecting memories you know are related.",
             "inputSchema": {
@@ -376,6 +404,18 @@ def create_server(db_path: str = "./anchor_data"):
                     associate=args.get("associate", True),
                     hebbian=args.get("hebbian", True),
                     debug=args.get("debug", False),
+                )
+                return {"memories": results}
+
+            elif name == "search_multi":
+                results = mem.search_multi(
+                    queries=args["queries"],
+                    n_results_per_query=args.get("n_results_per_query", 5),
+                    n_total=args.get("n_total"),
+                    tag=args.get("tag"),
+                    associate=args.get("associate", True),
+                    hebbian=args.get("hebbian", True),
+                    include_context=args.get("include_context", False),
                 )
                 return {"memories": results}
 
