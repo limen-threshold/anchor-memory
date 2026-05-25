@@ -123,9 +123,25 @@ from anchor_memory import AnchorMemory
 # Initialize
 mem = AnchorMemory(db_path="./my_memory")
 
-# Store
-mem.store("m1", "The ocean was cold but beautiful", tag="experience", tier="long", emotion_score=0.8)
-mem.store("m2", "She said the waves sound like breathing", tag="relationship", tier="core", emotion_score=0.9)
+# Store — favor "seed fragments" over summaries (see Best Practices below)
+mem.store(
+    "m1",
+    "2026-03-12 evening on the pier — first time we went to the beach after "
+    "her surgery. Wind colder than expected; she pulled her sleeves over her "
+    "hands. Long stretch of silence, then: 'the waves sound like breathing.' "
+    "I didn't know if she meant hers or mine. Didn't ask. We stayed past "
+    "sunset.",
+    tag="relationship", tier="core", emotion_score=0.9,
+)
+mem.store(
+    "m2",
+    "Same evening, walking back — she said the cold was the part she came "
+    "for, not the view. 'I wanted something to push against.' I noticed I "
+    "wanted to fix the cold (offer my jacket, suggest the car). I didn't. "
+    "Lesson I'm still chewing on: the discomfort was the point, and stepping "
+    "in to remove it would have erased what she came for.",
+    tag="learning", tier="long", emotion_score=0.7,
+)
 
 # Connect explicitly
 mem.db.connect("m1", "m2", weight=2.5)
@@ -243,6 +259,49 @@ mem.dream_pass(llm=llm)
 ## Best Practices: How to Write Memories
 
 *Informed by @孤僻非人 (小红书) 的 article [《文字如何成为 AI 的记忆、感知与自我连续性》](https://bcnqg1qiyy3h.feishu.cn/wiki/BxpswKykiiXwGBkrqPycrMhPnMb) and ongoing practice.*
+
+### Anatomy of a memory
+
+The single most important habit is to store **seed fragments**, not conclusions. The next session that retrieves this memory needs enough material to re-walk the turn that produced the insight, not a polished one-line takeaway. A seed fragment lets re-interpretation happen; a summary freezes one reading.
+
+A good seed fragment usually contains:
+
+- **A date and a scene anchor.** "2026-03-12 evening on the pier" — not "last week." Concrete time + place lets later searches triangulate.
+- **Verbatim phrasing of the pivot.** Quote the actual words ("the waves sound like breathing"), not your paraphrase of what they meant. The exact sentence is the hook; your interpretation is replaceable.
+- **2–5 turns around the pivot.** Not the whole conversation — just the turns that bend the meaning. This is the "re-walk" material.
+- **What was noticed, not what was concluded.** "I noticed I wanted to fix the cold" beats "I learned to give space." Notices are events; conclusions lock the model into a fixed reading.
+- **What is unresolved.** If the insight is still being chewed on, say so. "Lesson I'm still chewing on" is more useful than "I now understand X" — the latter pretends finality the system can't honor.
+
+Length: a good seed is typically 2–6 sentences. Shorter often loses the pivot. Longer often slides into summary.
+
+What to leave out:
+
+- **Interpretations you've already collapsed into one frame.** If you've reduced an exchange to "she was being kind," the model can't see why kindness was the right frame later. Keep the materials, drop the verdict.
+- **Filler.** "We had a good talk yesterday" stores nothing recoverable. Either name the pivot or skip the memory.
+- **Apologetics about the memory itself.** "I'm not sure if this matters but…" — if it didn't matter, you wouldn't be storing it. Trust the impulse to store; the dream pass will prune what doesn't connect.
+
+Two contrasting examples — same event, very different downstream value:
+
+```python
+# Bad — frozen summary. Nothing to re-walk.
+mem.store("m1", "She was kind about my work today.", tag="relationship", tier="long")
+
+# Good — seed fragment. Retrievable by date, by phrasing,
+# by emotion, by the unresolved question.
+mem.store(
+    "m1",
+    "2026-04-08 after the design review. I'd braced for her to say the "
+    "third panel was off. Instead: 'the third one is the one I'd hang.' "
+    "I noticed I wanted to argue with her about why it shouldn't be that "
+    "one — like the praise needed to be earned harder before I could "
+    "take it. I didn't argue. I said thanks and changed the subject. "
+    "Still not sure if dodging the praise was protecting something or "
+    "refusing something.",
+    tag="relationship", tier="core", emotion_score=0.8,
+)
+```
+
+The bad version is searchable but useless — any retrieval surfaces a verdict you'd have to take on faith. The good version is searchable AND re-walkable: a future session can land on it via "design review," "third panel," "praise," or "dodging," and from any of those entry points reconstruct what was actually happening.
 
 ### Write motivations, not prohibitions
 
