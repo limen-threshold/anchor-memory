@@ -225,13 +225,39 @@ class AnchorDB:
     def insert(self, memory_id: str, text: str, tag: str = "general",
                tier: str = "short", emotion_score: float = 0.5,
                context: str = ""):
-        """Insert or replace a memory. text = search summary, context = full original."""
+        """Insert a memory; re-inserting an existing id UPDATES it in place.
+
+        First write = INSERT. Re-store of an existing id = UPSERT that updates
+        content fields WITHOUT deleting the row.
+
+        ⚠️ Was `INSERT OR REPLACE`, which on a key conflict DELETEs the old row
+        then INSERTs — and the DELETE fires the edges table's ON DELETE CASCADE,
+        wiping EVERY edge (Hebbian history + manual links) of any memory that
+        gets re-stored. Verified: connect(A,B,2.0) → insert(A,...) → edge A↔B
+        becomes None. Native UPSERT (ON CONFLICT DO UPDATE) updates fields with
+        no DELETE, so edges survive. Two fields with independent lifecycles are
+        PRESERVED via COALESCE (only the first write sets them):
+          - timestamp:     a revision must not make an old memory look new
+                           (would break recency ordering);
+          - emotion_score: emotion propagation / dream-pass own it; a text edit
+                           must not reset it.
+        """
         self._ensure_context_column()
+        now = datetime.utcnow().isoformat()
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO memories (memory_id, text, timestamp, tag, tier, emotion_score, context) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (memory_id, text, datetime.utcnow().isoformat(), tag, tier, emotion_score, context),
+                """
+                INSERT INTO memories (memory_id, text, timestamp, tag, tier, emotion_score, context)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(memory_id) DO UPDATE SET
+                    text          = excluded.text,
+                    tag           = excluded.tag,
+                    tier          = excluded.tier,
+                    context       = excluded.context,
+                    timestamp     = COALESCE(memories.timestamp, excluded.timestamp),
+                    emotion_score = COALESCE(memories.emotion_score, excluded.emotion_score)
+                """,
+                (memory_id, text, now, tag, tier, emotion_score, context),
             )
             conn.commit()
         self.log_event(memory_id, "created", f"tag={tag} tier={tier}")
@@ -457,6 +483,14 @@ class AnchorDB:
 
     def _upsert_edge(self, conn, source_id: str, target_id: str,
                      weight: float, now: str):
+        # Self-loop guard: a memory must never have an edge to itself. Without
+        # this, connect(A,A) writes an A→A edge and get_neighbors(A) returns A
+        # as its own neighbor (associative recall would re-feed a memory to
+        # itself). Dedup-merge edge migration is another source (a survivor↔dup
+        # edge becomes survivor→survivor). All edge writes funnel through here,
+        # so one guard covers every path. source == target → no-op.
+        if source_id == target_id:
+            return
         conn.execute("""
             INSERT INTO edges (source_id, target_id, weight, created, last_fired)
             VALUES (?, ?, ?, ?, ?)
@@ -500,6 +534,34 @@ class AnchorDB:
                 (source_id, target_id)
             ).fetchone()
         return row["weight"] if row else None
+
+    def migrate_edges(self, from_id: str, to_id: str) -> int:
+        """Move all of `from_id`'s edges onto `to_id` (the survivor of a merge).
+        Each (from_id → X) becomes (to_id → X) and (X → from_id) becomes
+        (X → to_id) via _upsert_edge, which handles the tricky cases for free:
+        colliding edges saturate-add (MIN(sum, MAX_EDGE_WEIGHT)); a self-loop
+        (an existing to_id↔from_id edge becoming to_id→to_id) is dropped by the
+        _upsert_edge self-loop guard. The old from_id rows are then removed.
+        Returns the number of source edge rows migrated."""
+        now = datetime.utcnow().isoformat()
+        with self._conn() as conn:
+            outgoing = conn.execute(
+                "SELECT target_id, weight FROM edges WHERE source_id = ?", (from_id,)
+            ).fetchall()
+            incoming = conn.execute(
+                "SELECT source_id, weight FROM edges WHERE target_id = ?", (from_id,)
+            ).fetchall()
+            migrated = 0
+            for r in outgoing:
+                self._upsert_edge(conn, to_id, r["target_id"], r["weight"], now)
+                migrated += 1
+            for r in incoming:
+                self._upsert_edge(conn, r["source_id"], to_id, r["weight"], now)
+                migrated += 1
+            conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?",
+                         (from_id, from_id))
+            conn.commit()
+        return migrated
 
     def decay_edges(self, min_weight: float = 0.1, decay_factor: float = 0.9) -> int:
         """Weaken all edges by decay_factor. Delete edges below min_weight."""

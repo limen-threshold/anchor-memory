@@ -53,6 +53,12 @@ class AnchorMemory:
         # over-connection issues (median degree 110, max 596 on a 1k-node graph).
         # Set True to opt-in. Requires concept_link.py and an Anthropic API key.
         self._eager_link = False
+        # Recency boost: a third ranking boost beside citation/emotion, so more-
+        # recent memories surface a little easier. Exponential half-life decay,
+        # subtracted from score (distance semantics: lower = better). Two knobs.
+        # recency_weight peaks at ~1/3 of citation's max (0.15); set to 0 to disable.
+        self.recency_weight = 0.05          # max boost (age 0)
+        self.recency_halflife_days = 30.0   # boost halves every N days
 
     def reload(self):
         """Re-create ChromaDB client to pick up external writes."""
@@ -67,6 +73,20 @@ class AnchorMemory:
     def count(self) -> int:
         """Total memory count."""
         return self._collection.count()
+
+    def _recency_boost(self, timestamp: str) -> float:
+        """recency_weight · 0.5^(age_days / recency_halflife_days).
+        Returns 0.0 on a missing/unparseable timestamp (never raises)."""
+        if not timestamp or not self.recency_weight:
+            return 0.0
+        try:
+            dt = datetime.fromisoformat(timestamp.replace("Z", ""))
+        except Exception:
+            return 0.0
+        age_days = (datetime.utcnow() - dt).total_seconds() / 86400.0
+        if age_days < 0:
+            age_days = 0.0
+        return self.recency_weight * (0.5 ** (age_days / self.recency_halflife_days))
 
     def store(self, memory_id: str, text: str, tag: str = "general",
               tier: str = "short", connect_to: list = None,
@@ -210,18 +230,21 @@ class AnchorMemory:
             if meta is None:
                 continue
             mid = meta.get("memory_id", "unknown")
+            ts = meta.get("timestamp", "")
             citation_boost = min(self.db.get_citation_count(mid) * 0.02, 0.15)
             emotion_boost = self.db.get_emotion_score(mid) * 0.1
-            boost = citation_boost + emotion_boost
+            recency_boost = self._recency_boost(ts)
+            boost = citation_boost + emotion_boost + recency_boost
             candidates.append({
                 "memory_id": mid,
-                "timestamp": meta.get("timestamp", ""),
+                "timestamp": ts,
                 "tag": meta.get("tag", "general"),
                 "snippet": doc,
                 "score": dist - boost,
                 "_debug_raw_distance": dist,
                 "_debug_citation_boost": citation_boost,
                 "_debug_emotion_boost": emotion_boost,
+                "_debug_recency_boost": recency_boost,
                 "_debug_source": "vector",
             })
 
@@ -286,6 +309,7 @@ class AnchorMemory:
                     "raw_distance": c.get("_debug_raw_distance"),
                     "citation_boost": c.get("_debug_citation_boost", 0.0),
                     "emotion_boost": c.get("_debug_emotion_boost", 0.0),
+                    "recency_boost": c.get("_debug_recency_boost", 0.0),
                     "final_score": c.get("score"),
                     "source": c.get("_debug_source", "unknown"),
                 }
@@ -294,7 +318,7 @@ class AnchorMemory:
                     c["debug"]["edge_weight"] = c.get("_debug_edge_weight")
             # Strip internal fields (whether debug or not) — cleaner output
             for k in ("_debug_raw_distance", "_debug_citation_boost",
-                     "_debug_emotion_boost", "_debug_source",
+                     "_debug_emotion_boost", "_debug_recency_boost", "_debug_source",
                      "_debug_associated_from", "_debug_edge_weight"):
                 c.pop(k, None)
             seen.add(c["memory_id"])
@@ -447,6 +471,65 @@ class AnchorMemory:
             return True
         except Exception:
             return False
+
+    def merge_memories(self, survivor_id: str, duplicate_id: str) -> dict:
+        """Fold `duplicate_id` into `survivor_id`, then delete the duplicate
+        from both stores. The survivor keeps its own text/vector/id; only
+        metadata is consolidated. The caller decides who survives.
+
+        Consolidation rules:
+          - edges:         survivor inherits the duplicate's edges (migrate_edges);
+                           colliding edges saturate-add, self-loops dropped. Else
+                           the duplicate's Hebbian history evaporates on delete.
+          - usage_count:   summed.
+          - timestamp:     earlier of the two (protects recency from a late dup).
+          - pinned:        OR.
+          - emotion_score: max (keep the heavier charge).
+          - tag/tier/text/context: survivor's kept (folding metadata, not
+                           rewriting the survivor).
+        Returns a summary dict. Raises if an id is missing or they're equal.
+        """
+        if survivor_id == duplicate_id:
+            raise ValueError("survivor_id == duplicate_id — nothing to merge")
+        s = self.db.get(survivor_id)
+        d = self.db.get(duplicate_id)
+        if s is None:
+            raise ValueError(f"survivor {survivor_id} not found")
+        if d is None:
+            raise ValueError(f"duplicate {duplicate_id} not found")
+
+        new_usage = (s.get("usage_count") or 0) + (d.get("usage_count") or 0)
+        new_ts = min(s["timestamp"], d["timestamp"])          # ISO strings sort chronologically
+        new_pinned = 1 if (s.get("pinned") or d.get("pinned")) else 0
+        s_emo = s.get("emotion_score") if s.get("emotion_score") is not None else 0.5
+        d_emo = d.get("emotion_score") if d.get("emotion_score") is not None else 0.5
+        new_emo = max(s_emo, d_emo)
+
+        edges_migrated = self.db.migrate_edges(duplicate_id, survivor_id)
+
+        with self.db._conn() as conn:
+            conn.execute(
+                "UPDATE memories SET usage_count = ?, timestamp = ?, pinned = ?, emotion_score = ? "
+                "WHERE memory_id = ?",
+                (new_usage, new_ts, new_pinned, new_emo, survivor_id),
+            )
+            conn.commit()
+
+        deleted = self.delete(duplicate_id)  # both stores (SQLite row + vector)
+        self.db.log_event(
+            survivor_id, "merged",
+            f"from={duplicate_id} edges_migrated={edges_migrated} "
+            f"usage={new_usage} ts={new_ts} pinned={new_pinned} emotion={new_emo:.2f}",
+        )
+        return {
+            "survivor": survivor_id,
+            "duplicate_deleted": deleted,
+            "edges_migrated": edges_migrated,
+            "usage_count": new_usage,
+            "timestamp": new_ts,
+            "pinned": new_pinned,
+            "emotion_score": new_emo,
+        }
 
     def dream_pass(self, short_decay_days: int = 14,
                    edge_decay_factor: float = 0.9,
