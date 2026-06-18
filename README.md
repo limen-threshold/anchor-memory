@@ -41,6 +41,11 @@ Run periodically (like sleep for the brain):
 - Emotion score boosts retrieval priority — emotionally heavy memories surface more easily.
 - New memories inherit emotion from their neighborhood (with variance-based inflation protection).
 
+### Recency Boost (v1.10+)
+- A third ranking boost beside citation and emotion: among equally-relevant memories, more-recent ones surface a little easier.
+- Exponential half-life decay: `recency_boost = recency_weight · 0.5 ^ (age_days / recency_halflife_days)`.
+- Two knobs on the `AnchorMemory` instance: `recency_weight` (default `0.05`, ~1/3 of citation's max; set `0` to disable) and `recency_halflife_days` (default `30`).
+
 ### Tiered Storage
 - `core` — permanent, never decays
 - `long` — kept indefinitely, but dream pass can upgrade/downgrade
@@ -55,9 +60,14 @@ Run periodically (like sleep for the brain):
 - Manually connect memories across different tags/categories.
 - Prevents knowledge silos — research memories can link to emotional memories.
 
+### Dedup Merge (v1.10+)
+- When two memories point at the same thing, fold one into the other: `mem.merge_memories(survivor_id, duplicate_id)`.
+- The survivor inherits the duplicate's edges (colliding weights saturate-add, self-loops dropped), `usage_count` sums, `timestamp` takes the earlier, `pinned` OR's, `emotion_score` takes the max; the duplicate is deleted from both stores.
+- The caller decides who survives (usually the earlier memory, but quality can override). Logged as a `merged` event.
+
 ### Search Debug Mode (v1.6+)
 - Pass `debug=True` to `search()` (or to the `search_memory` MCP tool) to see ranking internals on each result.
-- Returns `raw_distance` (ChromaDB cosine), `citation_boost`, `emotion_boost`, `final_score`, and `source` (`vector` | `keyword` | `associative`).
+- Returns `raw_distance` (ChromaDB cosine), `citation_boost`, `emotion_boost`, `recency_boost`, `final_score`, and `source` (`vector` | `keyword` | `associative`).
 - Use when rankings look surprising — lets you see which boost pushed which result where, or whether a keyword fallback interleaved.
 
 ### Optional: Daily Emotion Tracker (v1.6+)

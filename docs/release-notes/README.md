@@ -2,6 +2,7 @@
 
 Most recent first. Each note follows the same shape: what changed, why it matters, what to do about it.
 
+- [v1.10](v1.10.md) — 2026-06-17 · UPSERT insert + self-loop guard (bug fixes) · recency boost · dedup merge
 - [v1.9.1](v1.9.1.md) — 2026-05-24
 - [v1.9](v1.9.md) — 2026-05-23 · multi-provider LLM abstraction (BYO LLM)
 - [v1.8.2](v1.8.2.md) — 2026-05-23 · multi-intent search
