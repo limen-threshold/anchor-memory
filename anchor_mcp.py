@@ -26,14 +26,11 @@ if sys.platform == "win32" or (hasattr(sys.stdout, 'buffer') and sys.stdout.enco
 # Add parent dir to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
 
+from anchor_memory import AnchorMemory
+
 
 def create_server(db_path: str = "./anchor_data"):
     """Create MCP server with Anchor Memory tools."""
-
-    # Imported here, not at module top: the CLI hook modes (--wakeup-text,
-    # --write-handoff) must stay on the SQLite-only fast path — importing
-    # anchor_memory pulls in sentence_transformers/chromadb (seconds).
-    from anchor_memory import AnchorMemory
 
     mem = AnchorMemory(db_path=db_path)
 
@@ -290,35 +287,13 @@ def create_server(db_path: str = "./anchor_data"):
         },
         {
             "name": "wakeup",
-            "description": "One-call cold start. Returns last handoff (session tail from the previous window) + pinned memories + most recent memories (by timestamp, regardless of emotion) + recent high-emotion + random old + unread comments. Call this FIRST at the start of a new conversation/window to ground context. Does NOT mark unread comments as read — call mark_comments_read separately after processing them.",
+            "description": "One-call cold start. Returns pinned memories + recent high-emotion + random old + unread comments. Use at the start of a new conversation/window to ground context. Does NOT mark unread comments as read — call mark_comments_read separately after processing them.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "n_recent": {"type": "integer", "description": "How many most-recent memories to return (timestamp order, no emotion filter).", "default": 5},
                     "n_high_emotion": {"type": "integer", "description": "How many recent high-emotion memories to return.", "default": 5},
                     "n_random": {"type": "integer", "description": "How many random old memories to return.", "default": 2},
-                    "high_emotion_days": {"type": "integer", "description": "How many days back counts as 'recent' for the high-emotion block.", "default": 3}
-                }
-            }
-        },
-        {
-            "name": "write_handoff",
-            "description": "Write a session tail before a conversation/window ends — what was happening, what's unfinished, decisions made, current mood. The next window's wakeup() returns it as last_handoff. Unlike leave_comment, a handoff is not attached to any memory; it's the closing state of the whole window. Call this when a conversation is wrapping up. A continuity header is added automatically — write the content as notes to yourself, in first person.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string", "description": "The session tail. E.g. 'We were debugging the parser; the fix is half-applied in parse.py. She seemed tired — keep tomorrow light.'"}
-                },
-                "required": ["content"]
-            }
-        },
-        {
-            "name": "get_handoffs",
-            "description": "Get recent handoffs (session tails), newest first. wakeup() already returns the latest one — use this only when you need to look further back across several windows.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "description": "Max handoffs to return.", "default": 5}
+                    "high_emotion_days": {"type": "integer", "description": "How many days back counts as 'recent'.", "default": 3}
                 }
             }
         },
@@ -521,15 +496,7 @@ def create_server(db_path: str = "./anchor_data"):
                     n_high_emotion=args.get("n_high_emotion", 5),
                     n_random=args.get("n_random", 2),
                     high_emotion_days=args.get("high_emotion_days", 3),
-                    n_recent=args.get("n_recent", 5),
                 )
-
-            elif name == "write_handoff":
-                hid = mem.db.write_handoff(args["content"])
-                return {"handoff_id": hid, "status": "written"}
-
-            elif name == "get_handoffs":
-                return {"handoffs": mem.db.get_handoffs(limit=args.get("limit", 5))}
 
             elif name == "leave_comment":
                 cid = mem.db.insert_comment(
@@ -608,7 +575,7 @@ def run_stdio(db_path: str):
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "anchor-memory",
-                        "version": "1.11",
+                        "version": "1.8",
                     }
                 }
             })
@@ -646,68 +613,10 @@ def run_stdio(db_path: str):
             })
 
 
-def format_wakeup_text(data: dict) -> str:
-    """Format a wakeup() dict as plain text, for hook/prompt injection.
-
-    Used by --wakeup-text: clients that can't rely on the model calling the
-    wakeup tool (or that want zero-latency cold start) inject this block via
-    a session-start hook or system prompt instead. Empty sections are omitted.
-    """
-    lines = []
-
-    if data.get("last_handoff"):
-        h = data["last_handoff"]
-        lines.append(f"## Last handoff ({h['created_at']})")
-        lines.append(h["content"])
-        lines.append("")
-
-    def section(title, items, fmt):
-        if not items:
-            return
-        lines.append(f"## {title}")
-        for it in items:
-            lines.append(fmt(it))
-        lines.append("")
-
-    section("Pinned", data.get("pinned", []),
-            lambda m: f"- [{m['memory_id']}] {m['text']}")
-    section("Recent (newest first)", data.get("recent", []),
-            lambda m: f"- [{m['memory_id']}] ({m['timestamp'][:10]}) {m['text']}")
-    section("Recent high-emotion", data.get("high_emotion", []),
-            lambda m: f"- [{m['memory_id']}] (emotion {m['emotion_score']:.2f}) {m['text']}")
-    section("Random old", data.get("random_old", []),
-            lambda m: f"- [{m['memory_id']}] ({m['timestamp'][:10]}) {m['text']}")
-    section("Unread comments", data.get("unread_comments", []),
-            lambda c: f"- [{c['comment_id']}] on [{c['memory_id']}] "
-                      f"({c['author']}, {c['created_at'][:10]}): {c['content']}")
-
-    return "\n".join(lines).strip()
-
-
-def _open_db(db_path: str):
-    """SQLite-only fast path for CLI modes — no embedder / ChromaDB load."""
-    from anchor_db import AnchorDB
-    return AnchorDB(os.path.join(db_path, "memories.db"))
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Anchor Memory MCP Server")
     parser.add_argument("--db-path", default="./anchor_data", help="Path to store memory data")
-    parser.add_argument("--wakeup-text", action="store_true",
-                        help="Print wakeup() as plain text and exit (for session-start hooks). Does not start the server.")
-    parser.add_argument("--write-handoff", metavar="CONTENT",
-                        help="Write a session-tail handoff and exit (for session-end hooks). Does not start the server.")
     args = parser.parse_args()
 
     os.makedirs(args.db_path, exist_ok=True)
-
-    if args.wakeup_text:
-        print(format_wakeup_text(_open_db(args.db_path).wakeup()))
-        sys.exit(0)
-
-    if args.write_handoff:
-        hid = _open_db(args.db_path).write_handoff(args.write_handoff)
-        print(f"handoff {hid} written")
-        sys.exit(0)
-
     run_stdio(args.db_path)
