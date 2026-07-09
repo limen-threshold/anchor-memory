@@ -65,6 +65,12 @@ Run periodically (like sleep for the brain):
 - The survivor inherits the duplicate's edges (colliding weights saturate-add, self-loops dropped), `usage_count` sums, `timestamp` takes the earlier, `pinned` OR's, `emotion_score` takes the max; the duplicate is deleted from both stores.
 - The caller decides who survives (usually the earlier memory, but quality can override). Logged as a `merged` event.
 
+### Cross-Window Continuity (v1.12+)
+- **`anchor_proxy.py`** — an OpenAI-compatible proxy that sits between your frontend (Open WebUI, SillyTavern, LobeHub, …) and any OpenAI-compatible upstream, and makes continuity **machine-side**: every turn it injects the pinned layer (identity + session_state + recent_timeline), current time + interval, and per-turn memory recall; after every response it rewrites the previous-window tail (`last_session.md`) — so continuity survives crashes and closed tabs, and never depends on the model remembering to call a tool.
+- **Zero-LLM floor**: injection, tail, and recall need no LLM beyond your chat model. Two enhancements — intent-split recall and a background curator (judge-store + timeline events) — light up when you configure one via `ANCHOR_LLM` / `~/.anchor/config.yaml` (same BYO-LLM pattern as dream pass; the AI can ask you which provider and write the config itself).
+- **Works without the proxy too**: on web/hosted clients (claude.ai etc.), plain MCP still gives you `wakeup()` cold start, `write_session_state` (the AI's own rolling state, auto-archived, continuity-headered), and all memory tools. Per-turn mechanics need the proxy or your own adapter.
+- **Built to be modded**: all continuity state is plain markdown with stable formats (`anchor_pinned.py`), every pipeline step is a replaceable function, and `build_turn()` is importable into your own server. Full guide + integration seams: [docs/cross-window.md](docs/cross-window.md).
+
 ### Search Debug Mode (v1.6+)
 - Pass `debug=True` to `search()` (or to the `search_memory` MCP tool) to see ranking internals on each result.
 - Returns `raw_distance` (ChromaDB cosine), `citation_boost`, `emotion_boost`, `recency_boost`, `final_score`, and `source` (`vector` | `keyword` | `associative`).
@@ -206,7 +212,8 @@ Restart Claude Code. Your AI now has these tools:
 - `dream_pass` — run consolidation (daily)
 - `set_emotion` / `set_tier` — tune a memory after the fact
 - `pin_memory` / `unpin_memory` — pin memories that should always surface on `wakeup()`
-- `wakeup` — curated cold-start subset (pinned + high-emotion + 1–2 random + unread comments)
+- `wakeup` — cold-start bundle (pinned + recent + high-emotion + 1–2 random + unread comments + session_state / timeline / previous-window tail when present)
+- `write_session_state` — the AI's own rolling state across windows (auto-archived, continuity-headered)
 - `mark_comments_read` — clear the unread queue after processing
 - `comment` — leave a comment under a memory (turns memories into dialogue spaces)
 - `graph_stats` — graph-level health

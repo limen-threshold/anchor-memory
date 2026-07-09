@@ -26,13 +26,25 @@ if sys.platform == "win32" or (hasattr(sys.stdout, 'buffer') and sys.stdout.enco
 # Add parent dir to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
 
-from anchor_memory import AnchorMemory
+import anchor_pinned
 
 
-def create_server(db_path: str = "./anchor_data"):
-    """Create MCP server with Anchor Memory tools."""
+def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
+    """Create MCP server with Anchor Memory tools.
+
+    pinned_dir: optional directory for the always-injected file layer
+    (session_state.md / recent_timeline.md / last_session.md — see
+    anchor_pinned.py). When set, wakeup() returns those files too and the
+    write_session_state tool becomes functional. Defaults to <db_path>/pinned.
+    """
+
+    # Imported here, not at module top: the CLI hook modes (--wakeup-text)
+    # must stay on the SQLite-only fast path — importing anchor_memory pulls
+    # in sentence_transformers/chromadb (seconds).
+    from anchor_memory import AnchorMemory
 
     mem = AnchorMemory(db_path=db_path)
+    pinned_dir = pinned_dir or os.path.join(db_path, "pinned")
 
     # MCP tool definitions
     TOOLS = [
@@ -66,6 +78,10 @@ def create_server(db_path: str = "./anchor_data"):
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "List of memory_ids to explicitly connect this memory to."
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional full original text (two-layer storage: text = searchable summary that gets embedded, context = verbatim source). Returned by searches with include_context."
                     }
                 },
                 "required": ["text"]
@@ -287,14 +303,26 @@ def create_server(db_path: str = "./anchor_data"):
         },
         {
             "name": "wakeup",
-            "description": "One-call cold start. Returns pinned memories + recent high-emotion + random old + unread comments. Use at the start of a new conversation/window to ground context. Does NOT mark unread comments as read — call mark_comments_read separately after processing them.",
+            "description": "One-call cold start. Returns pinned memories + most recent memories (timestamp order, no emotion filter) + recent high-emotion + random old + unread comments, plus the pinned file layer when configured: session_state (your own rolling state from previous windows), recent_timeline (event ledger), last_session (mechanical tail of the previous window). Call FIRST at the start of a new conversation/window. Does NOT mark unread comments as read — call mark_comments_read separately after processing them.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "n_recent": {"type": "integer", "description": "How many most-recent memories to return (timestamp order, no emotion filter).", "default": 5},
                     "n_high_emotion": {"type": "integer", "description": "How many recent high-emotion memories to return.", "default": 5},
                     "n_random": {"type": "integer", "description": "How many random old memories to return.", "default": 2},
-                    "high_emotion_days": {"type": "integer", "description": "How many days back counts as 'recent'.", "default": 3}
+                    "high_emotion_days": {"type": "integer", "description": "How many days back counts as 'recent' for the high-emotion block.", "default": 3}
                 }
+            }
+        },
+        {
+            "name": "write_session_state",
+            "description": "Write your session_state.md — your own rolling state that carries across windows (what's ongoing, decisions made, current threads, mood). This is the ONLY correct way to update it: the current version is archived automatically before the new one is written, and a continuity header is added so future windows read it as their own state, not a message from someone else. Write the COMPLETE current state (not a diff), in first person. Update it when things change materially and when a conversation wraps up.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The complete new session_state.md content."}
+                },
+                "required": ["content"]
             }
         },
         {
@@ -393,6 +421,7 @@ def create_server(db_path: str = "./anchor_data"):
                     tier=args.get("tier", "long"),
                     emotion_score=args.get("emotion_score", 0.5),
                     connect_to=args.get("connect_to"),
+                    context=args.get("context", ""),
                 )
                 return {"memory_id": mid, "status": "stored"}
 
@@ -492,11 +521,30 @@ def create_server(db_path: str = "./anchor_data"):
                 return {"memory_id": mid, "status": "stored"}
 
             elif name == "wakeup":
-                return mem.db.wakeup(
+                result = mem.db.wakeup(
                     n_high_emotion=args.get("n_high_emotion", 5),
                     n_random=args.get("n_random", 2),
                     high_emotion_days=args.get("high_emotion_days", 3),
+                    n_recent=args.get("n_recent", 5),
                 )
+                # Pinned file layer — session_state (rolling state), timeline
+                # (event ledger), tail (previous window, mechanical). Present
+                # only when the files exist; MCP-only setups get the same
+                # bridges as proxy setups, minus per-turn mechanics.
+                for key, fname in (("session_state", anchor_pinned.SESSION_STATE),
+                                   ("recent_timeline", anchor_pinned.RECENT_TIMELINE),
+                                   ("last_session", anchor_pinned.LAST_SESSION)):
+                    text = anchor_pinned.read_file(pinned_dir, fname)
+                    if text:
+                        result[key] = text
+                return result
+
+            elif name == "write_session_state":
+                archived = anchor_pinned.write_session_state(pinned_dir, args["content"])
+                out = {"status": "written", "path": os.path.join(pinned_dir, anchor_pinned.SESSION_STATE)}
+                if archived:
+                    out["archived_previous"] = archived
+                return out
 
             elif name == "leave_comment":
                 cid = mem.db.insert_comment(
@@ -543,9 +591,9 @@ def create_server(db_path: str = "./anchor_data"):
     return TOOLS, handle_tool, mem
 
 
-def run_stdio(db_path: str):
+def run_stdio(db_path: str, pinned_dir: str = None):
     """Run MCP server over stdio (standard MCP transport)."""
-    tools, handle_tool, mem = create_server(db_path)
+    tools, handle_tool, mem = create_server(db_path, pinned_dir=pinned_dir)
 
     def send(msg):
         sys.stdout.write(json.dumps(msg) + "\n")
@@ -575,7 +623,7 @@ def run_stdio(db_path: str):
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "anchor-memory",
-                        "version": "1.8",
+                        "version": "1.12",
                     }
                 }
             })
@@ -613,10 +661,71 @@ def run_stdio(db_path: str):
             })
 
 
+def format_wakeup_text(data: dict) -> str:
+    """Format a wakeup() dict as plain text, for hook/prompt injection.
+
+    Used by --wakeup-text: clients with lifecycle hooks (e.g. Claude Code
+    SessionStart) can inject this block mechanically instead of relying on
+    the model calling the wakeup tool. Empty sections are omitted.
+    """
+    lines = []
+
+    def file_section(title, text):
+        if text:
+            lines.append(f"## {title}")
+            lines.append(text)
+            lines.append("")
+
+    file_section("Session state (your own rolling state)", data.get("session_state"))
+    file_section("Previous window (mechanical tail)", data.get("last_session"))
+    file_section("Recent timeline", data.get("recent_timeline"))
+
+    def section(title, items, fmt):
+        if not items:
+            return
+        lines.append(f"## {title}")
+        for it in items:
+            lines.append(fmt(it))
+        lines.append("")
+
+    section("Pinned", data.get("pinned", []),
+            lambda m: f"- [{m['memory_id']}] {m['text']}")
+    section("Recent (newest first)", data.get("recent", []),
+            lambda m: f"- [{m['memory_id']}] ({m['timestamp'][:10]}) {m['text']}")
+    section("Recent high-emotion", data.get("high_emotion", []),
+            lambda m: f"- [{m['memory_id']}] (emotion {m['emotion_score']:.2f}) {m['text']}")
+    section("Random old", data.get("random_old", []),
+            lambda m: f"- [{m['memory_id']}] ({m['timestamp'][:10]}) {m['text']}")
+    section("Unread comments", data.get("unread_comments", []),
+            lambda c: f"- [{c['comment_id']}] on [{c['memory_id']}] "
+                      f"({c['author']}, {c['created_at'][:10]}): {c['content']}")
+
+    return "\n".join(lines).strip()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Anchor Memory MCP Server")
     parser.add_argument("--db-path", default="./anchor_data", help="Path to store memory data")
+    parser.add_argument("--pinned-dir", default=None,
+                        help="Pinned file layer directory (default: <db-path>/pinned)")
+    parser.add_argument("--wakeup-text", action="store_true",
+                        help="Print wakeup() as plain text and exit (for session-start hooks). "
+                             "SQLite-only fast path — no embedder load. Does not start the server.")
     args = parser.parse_args()
 
     os.makedirs(args.db_path, exist_ok=True)
-    run_stdio(args.db_path)
+    pinned = args.pinned_dir or os.path.join(args.db_path, "pinned")
+
+    if args.wakeup_text:
+        from anchor_db import AnchorDB
+        data = AnchorDB(os.path.join(args.db_path, "memories.db")).wakeup()
+        for key, fname in (("session_state", anchor_pinned.SESSION_STATE),
+                           ("recent_timeline", anchor_pinned.RECENT_TIMELINE),
+                           ("last_session", anchor_pinned.LAST_SESSION)):
+            text = anchor_pinned.read_file(pinned, fname)
+            if text:
+                data[key] = text
+        print(format_wakeup_text(data))
+        sys.exit(0)
+
+    run_stdio(args.db_path, pinned_dir=args.pinned_dir)

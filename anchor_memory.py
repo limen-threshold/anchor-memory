@@ -91,12 +91,13 @@ class AnchorMemory:
     def store(self, memory_id: str, text: str, tag: str = "general",
               tier: str = "short", connect_to: list = None,
               emotion_score: float = 0.5,
-              source: str = None, entity: str = None) -> str:
+              source: str = None, entity: str = None,
+              context: str = "") -> str:
         """Store a memory with optional connections and emotion scoring.
 
         Args:
             memory_id: Unique identifier.
-            text: Memory content.
+            text: Memory content — the searchable summary (what gets embedded).
             tag: Category tag.
             tier: 'core' (permanent), 'long' (kept), 'short' (14-day decay).
             connect_to: List of memory_ids to create edges with.
@@ -107,6 +108,11 @@ class AnchorMemory:
             entity: Optional disambiguator for multi-entity setups (e.g.
                     'pair:27|ai_name:Cheng' for penpal letter sources). Free-form
                     pipe-separated; substring-searchable.
+            context: Optional full original text (two-layer storage: text = the
+                    embedded search summary, context = verbatim source). Retrieved
+                    with include_context=True on search. The DB column existed
+                    since the context migration but store() never exposed it —
+                    only the summary layer was reachable through the public API.
 
         Returns:
             The memory_id.
@@ -154,7 +160,8 @@ class AnchorMemory:
             except Exception:
                 pass
 
-        self.db.insert(memory_id, text, tag=tag, tier=tier, emotion_score=emotion_score)
+        self.db.insert(memory_id, text, tag=tag, tier=tier, emotion_score=emotion_score,
+                       context=context or "")
 
         # Create explicit connections
         if connect_to:

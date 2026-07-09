@@ -646,11 +646,18 @@ class AnchorDB:
     # ── Wakeup: one-call cold start (design: Veille & 吱吱) ──
 
     def wakeup(self, n_high_emotion: int = 5, n_random: int = 2,
-               high_emotion_days: int = 3) -> dict:
+               high_emotion_days: int = 3, n_recent: int = 5) -> dict:
         """Gather everything needed for cold start in one call.
 
-        Returns pinned memories + recent high-emotion + random old + unread comments.
+        Returns pinned + recent + recent high-emotion + random old + unread comments.
         Design principle: rules live here, not in external config.
+
+        Note on recent: pulled by timestamp DESC with NO emotion filter.
+        Emotion-sorted "recent" hides calm-but-important events — yesterday's
+        quiet decision (emotion 0.4) loses to any intense moment in the same
+        window, and "what happened yesterday" becomes invisible at cold start.
+        Recency must be its own axis. high_emotion excludes ids already in
+        recent, so the two blocks never duplicate.
 
         Note on random_old: these are surfaced without touch() — they don't
         increment usage_count or update last_used. Any Hebbian edges created
@@ -667,11 +674,20 @@ class AnchorDB:
                 "WHERE pinned = 1 ORDER BY timestamp"
             ).fetchall()
 
-            high_emotion = conn.execute(
+            recent = conn.execute(
                 "SELECT memory_id, text, tag, emotion_score, timestamp, context FROM memories "
-                "WHERE timestamp >= ? AND pinned = 0 "
-                "ORDER BY emotion_score DESC LIMIT ?",
-                (cutoff, n_high_emotion),
+                "WHERE pinned = 0 ORDER BY timestamp DESC LIMIT ?",
+                (n_recent,),
+            ).fetchall() if n_recent > 0 else []
+            recent_ids = [r["memory_id"] for r in recent]
+
+            exclude = " AND memory_id NOT IN (%s)" % ",".join("?" * len(recent_ids)) \
+                if recent_ids else ""
+            high_emotion = conn.execute(
+                f"SELECT memory_id, text, tag, emotion_score, timestamp, context FROM memories "
+                f"WHERE timestamp >= ? AND pinned = 0{exclude} "
+                f"ORDER BY emotion_score DESC LIMIT ?",
+                [cutoff] + recent_ids + [n_high_emotion],
             ).fetchall()
 
             random_old = conn.execute(
@@ -690,6 +706,7 @@ class AnchorDB:
 
         return {
             "pinned": [dict(r) for r in pinned],
+            "recent": [dict(r) for r in recent],
             "high_emotion": [dict(r) for r in high_emotion],
             "random_old": [dict(r) for r in random_old],
             "unread_comments": [dict(r) for r in unread],
