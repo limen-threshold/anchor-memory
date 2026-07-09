@@ -65,6 +65,13 @@ Run periodically (like sleep for the brain):
 - The survivor inherits the duplicate's edges (colliding weights saturate-add, self-loops dropped), `usage_count` sums, `timestamp` takes the earlier, `pinned` OR's, `emotion_score` takes the max; the duplicate is deleted from both stores.
 - The caller decides who survives (usually the earlier memory, but quality can override). Logged as a `merged` event.
 
+### Cross-Window Continuity (v1.11+)
+- Three bridges across the window boundary: **recall** (the graph itself), **session tail** (`write_handoff` before a window closes → surfaced as `last_handoff` in the next `wakeup()`), and the **cold-start snapshot** (`wakeup()`).
+- `wakeup()` now includes a `recent` block pulled by timestamp with no emotion filter — emotion-sorted "recent" hides calm-but-important events, and "what happened yesterday" was invisible at cold start.
+- Handoffs get a continuity header at write time: the stored note states it's the AI's own note from its previous window, not a message from someone else — prevents "next window" phrasing from drifting into treating the next instance as a different entity.
+- CLI modes for deterministic injection via lifecycle hooks (no reliance on model discipline): `--wakeup-text` and `--write-handoff`, both SQLite-only fast paths safe for hooks.
+- Full guide: [docs/cross-window.md](docs/cross-window.md).
+
 ### Search Debug Mode (v1.6+)
 - Pass `debug=True` to `search()` (or to the `search_memory` MCP tool) to see ranking internals on each result.
 - Returns `raw_distance` (ChromaDB cosine), `citation_boost`, `emotion_boost`, `recency_boost`, `final_score`, and `source` (`vector` | `keyword` | `associative`).
@@ -206,7 +213,8 @@ Restart Claude Code. Your AI now has these tools:
 - `dream_pass` — run consolidation (daily)
 - `set_emotion` / `set_tier` — tune a memory after the fact
 - `pin_memory` / `unpin_memory` — pin memories that should always surface on `wakeup()`
-- `wakeup` — curated cold-start subset (pinned + high-emotion + 1–2 random + unread comments)
+- `wakeup` — curated cold-start subset (last handoff + pinned + recent + high-emotion + 1–2 random + unread comments)
+- `write_handoff` / `get_handoffs` — session tail for the next window (see Cross-Window Continuity)
 - `mark_comments_read` — clear the unread queue after processing
 - `comment` — leave a comment under a memory (turns memories into dialogue spaces)
 - `graph_stats` — graph-level health

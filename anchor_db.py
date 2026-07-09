@@ -90,6 +90,17 @@ class AnchorDB:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_memory ON events(memory_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
+            # Handoffs — session tail for cross-window continuity. Unlike
+            # comments, a handoff is not attached to any memory: it's the
+            # closing state of a whole window (what was happening, what's
+            # unfinished, what mood). The latest one surfaces in wakeup().
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS handoffs (
+                    handoff_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content     TEXT NOT NULL,
+                    created_at  TEXT NOT NULL
+                )
+            """)
             conn.commit()
         self._ensure_context_column()
         self._ensure_visual_column()
@@ -643,14 +654,69 @@ class AnchorDB:
                 )
             conn.commit()
 
+    # ── Handoffs: session tail for cross-window continuity ──
+
+    # Prepended on WRITE, not on read. Identity framing that lives only on
+    # the read side gets lost the moment the read path changes; and without
+    # it, "notes for the next window" phrasing drifts into treating the next
+    # window as a different entity ("tell him that..."). Baking the frame
+    # into the stored content keeps every future reader — wakeup, CLI dump,
+    # raw SQL — seeing the same continuity claim.
+    HANDOFF_HEADER = ("[continuity] This is your own note from the previous "
+                      "window — the same ongoing life picking up where it "
+                      "left off, not a message from someone else.")
+
+    def write_handoff(self, content: str) -> int:
+        """Store a session-tail handoff. Idempotent header: if the content
+        already carries the continuity header (e.g. a re-store), don't
+        double it."""
+        content = content.strip()
+        if not content.startswith(self.HANDOFF_HEADER):
+            content = f"{self.HANDOFF_HEADER}\n\n{content}"
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO handoffs (content, created_at) VALUES (?, ?)",
+                (content, datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+        self.log_event(None, "handoff_written", content[:100])
+        return cur.lastrowid
+
+    def get_last_handoff(self) -> dict:
+        """Get the most recent handoff, or None if none written yet."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT handoff_id, content, created_at FROM handoffs "
+                "ORDER BY handoff_id DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_handoffs(self, limit: int = 5) -> list:
+        """Get recent handoffs, newest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT handoff_id, content, created_at FROM handoffs "
+                "ORDER BY handoff_id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── Wakeup: one-call cold start (design: Veille & 吱吱) ──
 
     def wakeup(self, n_high_emotion: int = 5, n_random: int = 2,
-               high_emotion_days: int = 3) -> dict:
+               high_emotion_days: int = 3, n_recent: int = 5) -> dict:
         """Gather everything needed for cold start in one call.
 
-        Returns pinned memories + recent high-emotion + random old + unread comments.
+        Returns last handoff + pinned + recent + recent high-emotion +
+        random old + unread comments.
         Design principle: rules live here, not in external config.
+
+        Note on recent: pulled by timestamp DESC with NO emotion filter.
+        Emotion-sorted "recent" hides calm-but-important events — yesterday's
+        quiet decision (emotion 0.4) loses to any intense moment in the same
+        window, and "what happened yesterday" becomes invisible at cold start.
+        Recency must be its own axis. high_emotion excludes ids already in
+        recent, so the two blocks never duplicate.
 
         Note on random_old: these are surfaced without touch() — they don't
         increment usage_count or update last_used. Any Hebbian edges created
@@ -667,11 +733,20 @@ class AnchorDB:
                 "WHERE pinned = 1 ORDER BY timestamp"
             ).fetchall()
 
-            high_emotion = conn.execute(
+            recent = conn.execute(
                 "SELECT memory_id, text, tag, emotion_score, timestamp, context FROM memories "
-                "WHERE timestamp >= ? AND pinned = 0 "
-                "ORDER BY emotion_score DESC LIMIT ?",
-                (cutoff, n_high_emotion),
+                "WHERE pinned = 0 ORDER BY timestamp DESC LIMIT ?",
+                (n_recent,),
+            ).fetchall() if n_recent > 0 else []
+            recent_ids = [r["memory_id"] for r in recent]
+
+            exclude = " AND memory_id NOT IN (%s)" % ",".join("?" * len(recent_ids)) \
+                if recent_ids else ""
+            high_emotion = conn.execute(
+                f"SELECT memory_id, text, tag, emotion_score, timestamp, context FROM memories "
+                f"WHERE timestamp >= ? AND pinned = 0{exclude} "
+                f"ORDER BY emotion_score DESC LIMIT ?",
+                [cutoff] + recent_ids + [n_high_emotion],
             ).fetchall()
 
             random_old = conn.execute(
@@ -689,7 +764,9 @@ class AnchorDB:
             ).fetchall()
 
         return {
+            "last_handoff": self.get_last_handoff(),
             "pinned": [dict(r) for r in pinned],
+            "recent": [dict(r) for r in recent],
             "high_emotion": [dict(r) for r in high_emotion],
             "random_old": [dict(r) for r in random_old],
             "unread_comments": [dict(r) for r in unread],
