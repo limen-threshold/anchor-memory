@@ -623,7 +623,7 @@ def run_stdio(db_path: str, pinned_dir: str = None):
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "anchor-memory",
-                        "version": "1.12",
+                        "version": "1.13",
                     }
                 }
             })
