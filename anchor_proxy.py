@@ -75,6 +75,38 @@ NEW_WINDOW_MAX_MSGS = 2    # ≤ this many user/assistant msgs = fresh window �
 GATE_MAX_INTENTS = 4
 
 
+def step_trim_history(messages: list, pairs_min: int, pairs_max: int) -> list:
+    """Hysteresis ("stepped") history trimming — cache-friendly by design.
+
+    The obvious way to bound a chat window — "keep the newest N pairs, every
+    turn" — silently defeats provider prompt caching: each turn drops one pair
+    off the FRONT, so the prompt prefix changes at byte 0 and nothing is ever
+    a cache hit. Providers with prefix caching (Anthropic explicit, OpenAI /
+    DeepSeek implicit) bill the whole history at full price every turn.
+
+    Stepped trimming instead lets the window GROW from pairs_min up to
+    pairs_max (append-only → stable prefix → cache hits every turn), then
+    cuts back to pairs_min in one stroke. You pay one full cache rewrite per
+    (pairs_max - pairs_min) turns instead of every turn. Pick pairs_max below
+    your model's long-context degradation knee, and pairs_min so the average
+    window matches the size you actually want.
+
+    pairs_min <= 0 disables trimming; pairs_max <= pairs_min behaves like the
+    classic sliding window.
+    """
+    if pairs_min <= 0:
+        return messages
+    max_msgs = max(pairs_max, pairs_min) * 2
+    min_msgs = pairs_min * 2
+    if len(messages) <= max_msgs:
+        return messages
+    tail = messages[-min_msgs:]
+    i = 0
+    while i < len(tail) and tail[i].get("role") != "user":
+        i += 1
+    return tail[i:]
+
+
 # ──────── pipeline steps (each one is a documented override seam) ────────
 
 def extract_text(content) -> str:
@@ -399,7 +431,8 @@ def sse_extract_delta(line: str) -> str:
 
 # ──────── server ────────
 
-def create_app(db_path: str, pinned_dir: str, upstream: str, upstream_model: str):
+def create_app(db_path: str, pinned_dir: str, upstream: str, upstream_model: str,
+               history_pairs: int = 0, history_pairs_max: int = 0):
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse, StreamingResponse
     import httpx
@@ -435,6 +468,8 @@ def create_app(db_path: str, pinned_dir: str, upstream: str, upstream_model: str
                 client_system = extract_text(m.get("content"))
             else:
                 messages.append(dict(m))
+
+        messages = step_trim_history(messages, history_pairs, history_pairs_max)
 
         system, out_messages = build_turn(mem, llm, pinned_dir,
                                           db_path, messages, client_system)
@@ -493,6 +528,14 @@ if __name__ == "__main__":
                         help="Upstream OpenAI-compatible base URL, e.g. https://api.openai.com/v1")
     parser.add_argument("--upstream-model", default=os.getenv("ANCHOR_UPSTREAM_MODEL", ""),
                         help="Force this model id upstream (else the client's choice passes through)")
+    parser.add_argument("--history-pairs", type=int, default=0,
+                        help="Bound the live window: trim history to this many user/assistant "
+                             "pairs. 0 (default) = no trimming (client controls the window).")
+    parser.add_argument("--history-pairs-max", type=int, default=0,
+                        help="Stepped-trim ceiling: let history grow to this many pairs before "
+                             "cutting back to --history-pairs. Keeps the prompt prefix stable "
+                             "between cuts so provider prompt caching actually hits (a per-turn "
+                             "sliding window silently defeats it). Default 0 = slide classically.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8210)
     args = parser.parse_args()
@@ -506,5 +549,7 @@ if __name__ == "__main__":
     os.makedirs(pinned, exist_ok=True)
 
     import uvicorn
-    uvicorn.run(create_app(args.db_path, pinned, args.upstream.rstrip("/"), args.upstream_model),
+    uvicorn.run(create_app(args.db_path, pinned, args.upstream.rstrip("/"), args.upstream_model,
+                           history_pairs=args.history_pairs,
+                           history_pairs_max=args.history_pairs_max),
                 host=args.host, port=args.port)
