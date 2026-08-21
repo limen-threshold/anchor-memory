@@ -17,6 +17,9 @@ Commands:
     delete              delete matching memories from BOTH layers (asks --yes)
     demote --to TIER    change matching memories' tier (e.g. core → long)
     backup              copy DATA_DIR to DATA_DIR_backup_<timestamp>
+    ui [--port N]       open a local web page (127.0.0.1 only) to browse,
+                        select and delete/retier with your mouse — no
+                        commands needed beyond starting it
 
 Filters (combine freely; all optional):
     --tier core|long|short
@@ -181,11 +184,206 @@ def cmd_backup(conn, args, data_dir):
     _backup(data_dir)
 
 
+# ── Local web UI ─────────────────────────────────────────────────────────────
+# `ui` serves a browse/select/confirm page on 127.0.0.1 only. Same rules as
+# the CLI: preview before action, automatic backup before anything
+# destructive, deletes hit both layers. Stdlib only.
+
+_UI_PAGE = """<!doctype html><html><head><meta charset="utf-8">
+<title>Anchor Admin</title>
+<style>
+ body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em auto;
+        max-width: 60em; padding: 0 1em; color: #222; }}
+ table {{ border-collapse: collapse; width: 100%; margin: 1em 0; }}
+ th, td {{ border-bottom: 1px solid #ddd; padding: .4em .6em; text-align: left;
+          font-size: .9em; }}
+ .tier-core {{ color: #b00; font-weight: 600; }}
+ .bar {{ background: #f5f5f5; padding: .8em 1em; border-radius: .5em;
+        margin: 1em 0; }}
+ .warn {{ background: #fff3e0; border: 1px solid #f0c080; padding: .8em 1em;
+         border-radius: .5em; }}
+ button {{ padding: .45em 1.1em; border-radius: .4em; border: 1px solid #999;
+          background: #fff; cursor: pointer; }}
+ button.danger {{ border-color: #b00; color: #b00; }}
+ input, select {{ padding: .3em; }}
+ small {{ color: #777; }}
+</style></head><body>
+<h2>Anchor Admin</h2>
+<p><small>store: {data_dir} &nbsp;·&nbsp; {counts}</small></p>
+<form method="get" class="bar">
+ tier <select name="tier"><option value="">any</option>
+   <option {sel_core}>core</option><option {sel_long}>long</option>
+   <option {sel_short}>short</option></select>
+ &nbsp; from <input name="since" value="{since}" placeholder="YYYY-MM-DD" size="10">
+ &nbsp; to <input name="until" value="{until}" placeholder="YYYY-MM-DD" size="10">
+ &nbsp; <button>filter</button>
+</form>
+{body}
+</body></html>"""
+
+
+def _ui_counts(conn):
+    rows = conn.execute(
+        "SELECT tier, COUNT(*) FROM memories GROUP BY tier ORDER BY tier").fetchall()
+    total = sum(r[1] for r in rows)
+    return f"{total} memories (" + ", ".join(f"{r[0]}: {r[1]}" for r in rows) + ")"
+
+
+def _ui_rows(conn, q):
+    clauses, params = [], []
+    if q.get("tier"):
+        clauses.append("tier = ?"); params.append(q["tier"])
+    if q.get("since"):
+        clauses.append("timestamp >= ?"); params.append(q["since"])
+    if q.get("until"):
+        clauses.append("timestamp < ?"); params.append(q["until"])
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return conn.execute(
+        f"SELECT memory_id, tier, timestamp, text FROM memories{where} "
+        "ORDER BY timestamp DESC LIMIT 500", params).fetchall()
+
+
+def _esc(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def cmd_ui(conn, args, data_dir):
+    import http.server
+    import urllib.parse
+    import webbrowser
+
+    port = args.port
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, html, code=200):
+            body = html.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _page(self, q, body):
+            tier = q.get("tier", "")
+            return _UI_PAGE.format(
+                data_dir=_esc(data_dir), counts=_esc(_ui_counts(conn)),
+                sel_core="selected" if tier == "core" else "",
+                sel_long="selected" if tier == "long" else "",
+                sel_short="selected" if tier == "short" else "",
+                since=_esc(q.get("since", "")), until=_esc(q.get("until", "")),
+                body=body)
+
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            q = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+            rows = _ui_rows(conn, q)
+            tr = "".join(
+                f'<tr><td><input type="checkbox" name="id" value="{_esc(r["memory_id"])}"></td>'
+                f'<td>{_esc(r["memory_id"])}</td>'
+                f'<td class="tier-{_esc(r["tier"])}">{_esc(r["tier"])}</td>'
+                f'<td>{_esc(r["timestamp"][:10])}</td>'
+                f'<td>{_esc(" ".join((r["text"] or "").split())[:70])}</td></tr>'
+                for r in rows)
+            body = (
+                f'<form method="post" action="/act">'
+                f'<input type="hidden" name="tier_f" value="{_esc(q.get("tier", ""))}">'
+                f'<p>{len(rows)} match{"" if len(rows) == 1 else "es"} '
+                f'(showing up to 500). '
+                f'<label><input type="checkbox" '
+                f'onclick="document.querySelectorAll(\'input[name=id]\')'
+                f'.forEach(c=>c.checked=this.checked)"> select all shown</label></p>'
+                f'<table><tr><th></th><th>id</th><th>tier</th><th>date</th>'
+                f'<th>text</th></tr>{tr}</table>'
+                f'<div class="bar">with selected: '
+                f'<button class="danger" name="op" value="delete">delete (both layers)</button>'
+                f' &nbsp; <button name="op" value="demote">change tier to</button> '
+                f'<select name="to"><option>long</option><option>short</option>'
+                f'<option>core</option></select>'
+                f'<br><small>either action backs up the whole data folder first; '
+                f'a confirmation page shows exactly what will change before '
+                f'anything happens</small></div></form>')
+            self._send(self._page(q, body))
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            form = urllib.parse.parse_qs(self.rfile.read(length).decode())
+            ids = form.get("id", [])
+            op = form.get("op", [""])[0]
+            to = form.get("to", ["long"])[0]
+            confirmed = form.get("confirmed", [""])[0] == "1"
+            if not ids:
+                self._send(self._page({}, '<p class="warn">nothing selected</p>'))
+                return
+            if self.path == "/act" and not confirmed:
+                # Confirmation page — re-post the same ids with confirmed=1.
+                hidden = "".join(
+                    f'<input type="hidden" name="id" value="{_esc(i)}">' for i in ids)
+                verb = ("delete from BOTH layers" if op == "delete"
+                        else f"change tier to {to}")
+                listing = "".join(f"<li>{_esc(i)}</li>" for i in ids[:50])
+                more = (f"<li>... and {len(ids) - 50} more</li>"
+                        if len(ids) > 50 else "")
+                body = (
+                    f'<div class="warn"><p><b>{len(ids)}</b> memories will '
+                    f'{verb}. The data folder is backed up first.</p>'
+                    f'<ul>{listing}{more}</ul>'
+                    f'<form method="post" action="/act">{hidden}'
+                    f'<input type="hidden" name="op" value="{_esc(op)}">'
+                    f'<input type="hidden" name="to" value="{_esc(to)}">'
+                    f'<input type="hidden" name="confirmed" value="1">'
+                    f'<button class="danger">yes, do it</button> '
+                    f'<a href="/">cancel</a></form></div>')
+                self._send(self._page({}, body))
+                return
+            bak = _backup(data_dir)
+            if op == "delete":
+                import chromadb
+                collection = chromadb.PersistentClient(
+                    path=os.path.join(data_dir, "chroma")
+                ).get_or_create_collection(name="memories")
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from anchor_db import AnchorDB
+                db = AnchorDB(os.path.join(data_dir, "memories.db"))
+                for i in range(0, len(ids), 100):
+                    collection.delete(ids=ids[i:i + 100])
+                for mid in ids:
+                    db.delete(mid)
+                done = f"deleted {len(ids)} memories (both layers, edges cleared)"
+            else:
+                ph = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"UPDATE memories SET tier = ? WHERE memory_id IN ({ph})",
+                    [to] + ids)
+                conn.commit()
+                done = f"changed {len(ids)} memories to tier={to}"
+            self._send(self._page({}, (
+                f'<div class="bar"><p>{_esc(done)}</p>'
+                f'<p><small>backup: {_esc(bak)}</small></p>'
+                f'<p><a href="/">back to the list</a></p></div>')))
+
+    server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+    url = f"http://127.0.0.1:{port}/"
+    print(f"Anchor Admin UI: {url}  (Ctrl-C to stop)")
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("data_dir")
-    p.add_argument("command", choices=["count", "list", "delete", "demote", "backup"])
+    p.add_argument("command", choices=["count", "list", "delete", "demote", "backup", "ui"])
+    p.add_argument("--port", type=int, default=8765)
     p.add_argument("--tier", choices=["core", "long", "short"])
     p.add_argument("--source")
     p.add_argument("--since")
@@ -201,7 +399,8 @@ def main():
     data_dir = os.path.expanduser(args.data_dir)
     conn = _connect(data_dir)
     {"count": cmd_count, "list": cmd_list, "delete": cmd_delete,
-     "demote": cmd_demote, "backup": cmd_backup}[args.command](conn, args, data_dir)
+     "demote": cmd_demote, "backup": cmd_backup,
+     "ui": cmd_ui}[args.command](conn, args, data_dir)
 
 
 if __name__ == "__main__":
