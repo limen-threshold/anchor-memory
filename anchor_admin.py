@@ -368,6 +368,11 @@ def cmd_ui(conn, args, data_dir):
     server = http.server.HTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"Anchor Admin UI: {url}  (Ctrl-C to stop)")
+    print("Note: the page is served on THIS machine only. If Anchor runs on a "
+          "remote server, tunnel first from your own computer:\n"
+          f"      ssh -L {port}:127.0.0.1:{port} user@server\n"
+          f"      then open {url} in your local browser. "
+          "(Don't bind this to a public address — it has no login.)")
     try:
         webbrowser.open(url)
     except Exception:
