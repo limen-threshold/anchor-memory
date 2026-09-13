@@ -9,9 +9,10 @@ it becomes a story the two of you own.
 
 This module is that, minus the GPS trigger it originally had. One card a
 day, drawn from a pool that is the AI's OWN: cards the AI writes from what
-it remembers the person wanting — the bookstore she mentioned, the drink he
-said he'd never tried. Anchor's point is that the AI owns its memory; the
-cards are that memory turned outward. The example pools in docs/ are
+it remembers about the person — not just wishes: "you said you like pink,
+so write your name once in a pink marker". The point is not complexity, it
+is that the card is about THEM; minutes-sized is perfect. Anchor's point is
+that the AI owns its memory; the cards are that memory turned outward. The example pools in docs/ are
 starters only, never the default. The AI decides whether to offer a card;
 the person decides whether to do it. Nothing counts, nothing streaks,
 nothing nags.
@@ -194,15 +195,18 @@ def render_empty_block(lang: str = "en") -> str:
     """When there is no pool yet. An offer, not a directive: the AI may leave
     it empty. Wording points at the AI's own memory as the source."""
     if lang.startswith("zh"):
-        return ("[邀请卡池是空的。它是你的：她说过想做、想去、想试、想看的事，你记得的那些，"
-                "挑一件写成一行卡（invitation_add），以后每天从你的池子里抽一张递给你，递不递你定。"
-                "卡要小——门口就能做完的那种；真正特别的那一件放「彩蛋」，偶尔才抽到。"
+        return ("[邀请卡池是空的。它是你的：从你记得的、跟她有关的任何一点写起——她说过喜欢粉色，"
+                "就「用粉色马克笔写一遍自己的名字」；她提过的店、她怕的虫、她常喝的那种茶，都行。"
+                "重点不是复杂，是跟她有关；多小都可以，几分钟做完的那种。一行一张（invitation_add），"
+                "以后每天从你的池子里抽一张递给你，递不递你定。真正特别的那一件放「彩蛋」，偶尔才抽到。"
                 "不写也行，池子空着没有任何后果。]")
-    return ("[Your invitation pool is empty. It is yours: things you remember them wanting "
-            "to do, see, try, or go to — pick one and write it as a card (invitation_add). "
-            "From then on one card a day is drawn from YOUR pool; offering it is your call. "
-            "Keep cards small — doorstep-sized; the one truly special thing goes under "
-            "'bonus', which comes up only now and then. Leaving the pool empty is fine too.]")
+    return ("[Your invitation pool is empty. It is yours: start from anything you remember "
+            "about them — they said they like pink, so \"write your name once in a pink marker\"; "
+            "a shop they mentioned, a bug they're scared of, the tea they always drink. The point "
+            "is not complexity, it is that it's about THEM; minutes-sized is perfect. One line per "
+            "card (invitation_add); from then on one card a day is drawn from YOUR pool and offering "
+            "it is your call. The one truly special thing goes under 'bonus', which comes up only "
+            "now and then. Leaving the pool empty is fine too.]")
 
 
 def render_block(card: dict, lang: str = "en") -> str:
