@@ -152,7 +152,7 @@ All knobs live on the `AnchorMemory` instance; `same_day_cap = 0` restores plain
 
 ### Invitations (v1.15+)
 
-"Want to do something small together?" — one card a day from a plain-text pool (`<pinned>/invitations.md`; examples in `docs/`), drawn by `anchor_invite.py`. The AI may offer it or not; the person may do it or not. If they do, `invitation_done(name, note)` stores the moment as a **named** shared memory (tag `together`) — the reward is the name, not points. `wakeup()` and the proxy hand the card over once a day. No streaks, no scores, no GPS. Details: [docs/release-notes/v1.15.md](docs/release-notes/v1.15.md).
+"Want to do something small together?" — one card a day from a pool that is the AI's own: `<pinned>/invitations.md`, empty by default, filled by the AI with `invitation_add` from what it remembers the person wanting (starters in `docs/` are opt-in, never applied). The AI may offer the card or not; the person may do it or not. If they do, `invitation_done(name, note)` stores the moment as a **named** shared memory (tag `together`) — the reward is the name, not points. `wakeup()` and the proxy hand the card over once a day. No streaks, no scores, no GPS. Details: [docs/release-notes/v1.15.md](docs/release-notes/v1.15.md).
 
 ### Keyword Lane Notes (v1.14+)
 

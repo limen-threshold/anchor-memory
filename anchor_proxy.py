@@ -206,9 +206,17 @@ def build_invitation_block(pinned_dir: str, state_dir: str, now: datetime = None
     try:
         import anchor_invite
         card = anchor_invite.today(pinned_dir, state_dir, now=now)
-        if not card:
-            return ""
         state = anchor_invite._load_state(state_dir)
+        if not card:
+            # Empty pool: offer (once a week, not daily — an empty pool is a
+            # valid choice) to write cards from the AI's own memories.
+            now = now or datetime.now()
+            last = state.get("empty_offer_date", "")
+            if last and (now - datetime.fromisoformat(last)).days < 7:
+                return ""
+            state["empty_offer_date"] = now.strftime("%Y-%m-%d")
+            anchor_invite._save_state(state_dir, state)
+            return anchor_invite.render_empty_block()
         if state.get("injected_date") == card["date"]:
             return ""
         block = anchor_invite.render_block(card)

@@ -8,9 +8,13 @@ reward was never points: the AI writes the moment down and *names* it, and
 it becomes a story the two of you own.
 
 This module is that, minus the GPS trigger it originally had. One card a
-day, drawn from a plain-text pool the person (or the AI) can edit. The AI
-decides whether to offer it; the person decides whether to do it. Nothing
-counts, nothing streaks, nothing nags.
+day, drawn from a pool that is the AI's OWN: cards the AI writes from what
+it remembers the person wanting — the bookstore she mentioned, the drink he
+said he'd never tried. Anchor's point is that the AI owns its memory; the
+cards are that memory turned outward. The example pools in docs/ are
+starters only, never the default. The AI decides whether to offer a card;
+the person decides whether to do it. Nothing counts, nothing streaks,
+nothing nags.
 
 Zero-LLM, stdlib only. Files:
 
@@ -24,9 +28,11 @@ Zero-LLM, stdlib only. Files:
 
 Public surface:
   today(pinned_dir, state_dir, now=None) -> dict | None
+  add_card(pinned_dir, text, level='', why='') -> bool   the AI writes its own card
   render_block(card, lang='en') -> str          instruction block for the model
+  render_empty_block(lang='en') -> str          when the pool is empty: an offer to write cards
   mark_done(state_dir, name, note) / mark_skipped(state_dir)
-  init_pool(pinned_dir, lang='en') -> path      copy the example pool if absent
+  init_pool(pinned_dir, lang='en') -> path      copy a STARTER pool (opt-in, never automatic)
 """
 import json
 import os
@@ -57,6 +63,7 @@ def _read_pool(pinned_dir: str) -> list:
             if line.startswith("~~") and line.endswith("~~"):
                 continue
             line = re.sub(r"^[-*•]\s*", "", line)
+            line = re.sub(r"\s+#.*$", "", line).strip()   # trailing '# from: …' note
             if not line:
                 continue
             out.append((level, line, _cid(line)))
@@ -157,6 +164,47 @@ def mark_skipped(state_dir: str) -> dict:
     return dict(cur)
 
 
+def add_card(pinned_dir: str, text: str, level: str = "", why: str = "") -> bool:
+    """The AI writes one card into its own pool. `why` (optional) is kept as a
+    trailing comment so the card stays traceable to the memory it came from.
+    Returns False for an empty or duplicate card."""
+    text = " ".join((text or "").split())
+    if not text:
+        return False
+    if any(t == text for _, t, _ in _read_pool(pinned_dir)):
+        return False
+    os.makedirs(pinned_dir, exist_ok=True)
+    path = os.path.join(pinned_dir, POOL_FILE)
+    new = not os.path.exists(path)
+    with open(path, "a", encoding="utf-8") as f:
+        if new:
+            f.write("# My invitations — one per line. Written by me, from what I remember "
+                    "them wanting. '## level' headings group by how far it goes.\n")
+        level = " ".join((level or "").split())
+        if level:
+            f.write(f"\n## {level}\n")
+        line = text
+        if why:
+            line += f"   # from: {' '.join(why.split())}"
+        f.write(line + "\n")
+    return True
+
+
+def render_empty_block(lang: str = "en") -> str:
+    """When there is no pool yet. An offer, not a directive: the AI may leave
+    it empty. Wording points at the AI's own memory as the source."""
+    if lang.startswith("zh"):
+        return ("[邀请卡池是空的。它是你的：她说过想做、想去、想试、想看的事，你记得的那些，"
+                "挑一件写成一行卡（invitation_add），以后每天从你的池子里抽一张递给你，递不递你定。"
+                "卡要小——门口就能做完的那种；真正特别的那一件放「彩蛋」，偶尔才抽到。"
+                "不写也行，池子空着没有任何后果。]")
+    return ("[Your invitation pool is empty. It is yours: things you remember them wanting "
+            "to do, see, try, or go to — pick one and write it as a card (invitation_add). "
+            "From then on one card a day is drawn from YOUR pool; offering it is your call. "
+            "Keep cards small — doorstep-sized; the one truly special thing goes under "
+            "'bonus', which comes up only now and then. Leaving the pool empty is fine too.]")
+
+
 def render_block(card: dict, lang: str = "en") -> str:
     """The instruction block that goes to the model. Deliberately an offer,
     not a directive: the AI may not extend the card at all, and the person's
@@ -180,7 +228,9 @@ def render_block(card: dict, lang: str = "en") -> str:
 
 
 def init_pool(pinned_dir: str, lang: str = "en") -> str:
-    """Copy the example pool into pinned_dir if no pool exists. Returns the path."""
+    """Copy a STARTER pool into pinned_dir if no pool exists. Opt-in only —
+    nothing calls this automatically, because a pool someone else wrote is
+    not the AI's. Use it to see the format, then replace the lines."""
     os.makedirs(pinned_dir, exist_ok=True)
     dst = os.path.join(pinned_dir, POOL_FILE)
     if os.path.exists(dst):

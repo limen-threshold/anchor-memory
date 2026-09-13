@@ -16,6 +16,15 @@ root = tempfile.mkdtemp(prefix="anchor_invite_")
 pinned = os.path.join(root, "pinned"); state = os.path.join(root, "state")
 
 check(ai.today(pinned, state) is None, "no pool → None")
+check("invitation_add" in ai.render_empty_block() and "邀请卡池是空的" in ai.render_empty_block("zh"), "empty-pool offer renders")
+# the AI writes its own cards
+check(ai.add_card(pinned, "去你说过的那家旧书店，只看不买", "出门", "mem_123 她 8-02 说想去"), "add_card writes first card")
+check(not ai.add_card(pinned, "去你说过的那家旧书店，只看不买"), "add_card dedupes")
+own = ai._read_pool(pinned)
+check(len(own) == 1 and own[0][0] == "出门" and own[0][1].startswith("去你说过的"), f"own card parsed with level ({own})")
+c_own = ai.today(pinned, state, now=datetime(2026, 9, 12, 9, 0))
+check(c_own and c_own["text"].startswith("去你说过的"), "draw comes from the AI's own pool")
+os.remove(os.path.join(pinned, ai.POOL_FILE)); shutil.rmtree(state, ignore_errors=True)
 p = ai.init_pool(pinned, lang="zh")
 check(os.path.exists(p) and ai.init_pool(pinned) == p, "init_pool copies once, idempotent")
 pool = ai._read_pool(pinned)
@@ -60,8 +69,12 @@ with open(os.path.join(pinned, ai.POOL_FILE), "a", encoding="utf-8") as f:
     f.write("\n## 门口\n~~退役的一张~~\n")
 check(all(t != "退役的一张" for _, t, _ in ai._read_pool(pinned)), "~~struck~~ line skipped")
 
-# proxy once-per-day gate
+# proxy: empty pool → offer once a week; with pool → card once per day
 import anchor_proxy
+e1 = anchor_proxy.build_invitation_block(os.path.join(root, "nopool"), os.path.join(root, "state_e"), now=d1)
+e2 = anchor_proxy.build_invitation_block(os.path.join(root, "nopool"), os.path.join(root, "state_e"), now=d1 + timedelta(days=3))
+e3 = anchor_proxy.build_invitation_block(os.path.join(root, "nopool"), os.path.join(root, "state_e"), now=d1 + timedelta(days=8))
+check("pool is empty" in e1 and not e2 and e3, "proxy empty-pool offer once a week")
 s2 = os.path.join(root, "state2")
 b1 = anchor_proxy.build_invitation_block(pinned, s2, now=d1)
 b2 = anchor_proxy.build_invitation_block(pinned, s2, now=d1 + timedelta(hours=1))
@@ -73,7 +86,8 @@ try:
     import anchor_mcp
     tools, handle, mem = anchor_mcp.create_server(os.path.join(root, "db"), pinned_dir=pinned)
     names = {t["name"] for t in tools}
-    check({"get_invitation", "invitation_done", "invitation_skip"} <= names, "MCP tools registered")
+    check({"get_invitation", "invitation_add", "invitation_done", "invitation_skip"} <= names, "MCP tools registered")
+    check(handle("invitation_add", {"text": "拍一张你说过的那棵树", "level": "附近", "why": "她 9-01 提过"})["status"] == "added", "MCP invitation_add")
     g = handle("get_invitation", {})
     check(g.get("invitation") and g["invitation"]["status"] in ("new", "done", "skipped"), f"get_invitation → {g.get('invitation', {}).get('text')}")
     d = handle("invitation_done", {"name": "便利店的柠檬水", "note": "她说太酸"})

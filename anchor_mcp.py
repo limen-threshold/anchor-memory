@@ -328,6 +328,19 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
+            "name": "invitation_add",
+            "description": "Write one card into YOUR invitation pool — from what you remember them wanting to do, see, try, or go to (the bookstore they mentioned, the drink they never tried). Keep cards small, doorstep-sized; the one truly special thing goes under level 'bonus' (彩蛋), which is drawn only now and then. One card a day is then drawn from your pool. Optional `why` keeps the card traceable to the memory it came from.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The invitation, one line, e.g. '去你说过的那家旧书店，只看不买'."},
+                    "level": {"type": "string", "description": "How far it goes, e.g. 门口 / 附近 / 出门 / 彩蛋 or doorstep / nearby / out / bonus. Optional."},
+                    "why": {"type": "string", "description": "Where it came from, e.g. a memory id or 'she said on 8-02 she misses the sea'. Optional."}
+                },
+                "required": ["text"]
+            }
+        },
+        {
             "name": "invitation_done",
             "description": "The person did today's invitation and told you. Give the moment a NAME (that name is the reward — not points) and it is stored as a shared memory (tag 'together', tier 'long') plus a timeline event.",
             "inputSchema": {
@@ -593,11 +606,14 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
             elif name == "get_invitation":
                 card = anchor_invite.today(pinned_dir, db_path)
                 if not card:
-                    return {"invitation": None,
-                            "note": f"No pool at {os.path.join(pinned_dir, anchor_invite.POOL_FILE)} — "
-                                    "write one (one line per invitation, '## level' headings) or run "
-                                    "`python -c \"import anchor_invite; anchor_invite.init_pool('<pinned_dir>', lang='zh')\"`."}
+                    return {"invitation": None, "how": anchor_invite.render_empty_block(),
+                            "pool": os.path.join(pinned_dir, anchor_invite.POOL_FILE)}
                 return {"invitation": card, "how": anchor_invite.render_block(card)}
+
+            elif name == "invitation_add":
+                ok = anchor_invite.add_card(pinned_dir, args.get("text", ""),
+                                            args.get("level", ""), args.get("why", ""))
+                return {"status": "added" if ok else "skipped (empty or already in your pool)"}
 
             elif name == "invitation_done":
                 card = anchor_invite.mark_done(db_path, args.get("name", ""), args.get("note", ""))
@@ -731,7 +747,7 @@ def run_stdio(db_path: str, pinned_dir: str = None):
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "anchor-memory",
-                        "version": "1.15",
+                        "version": "1.15.1",
                     }
                 }
             })
