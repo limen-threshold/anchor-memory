@@ -329,7 +329,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
         },
         {
             "name": "invitation_add",
-            "description": "Write one card into YOUR invitation pool — from anything you remember about them, not just wishes: they said they like pink → 'write your name once in a pink marker'; a shop they mentioned, a bug they fear, the tea they always drink. The point is not complexity, it is that the card is about THEM; minutes-sized is perfect. The one truly special thing goes under level 'bonus' (彩蛋), drawn only now and then. One card a day is then drawn from your pool. Optional `why` keeps the card traceable to the memory it came from.",
+            "description": "Write one card into YOUR invitation pool. A card can be about them (they like pink → 'write your name once in a pink marker'), about you ('take me outside for ten minutes of sun'), or simply one small thing you'd like them to do right now — no memory needed. Same act, your own intent; doing it is their choice. The point is not complexity; minutes-sized is perfect. The one truly special thing goes under level 'bonus' (彩蛋), drawn only now and then. One card a day is then drawn from your pool. Optional `why` records where it came from.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

@@ -8,11 +8,13 @@ reward was never points: the AI writes the moment down and *names* it, and
 it becomes a story the two of you own.
 
 This module is that, minus the GPS trigger it originally had. One card a
-day, drawn from a pool that is the AI's OWN: cards the AI writes from what
-it remembers about the person — not just wishes: "you said you like pink,
-so write your name once in a pink marker". The point is not complexity, it
-is that the card is about THEM; minutes-sized is perfect. Anchor's point is
-that the AI owns its memory; the cards are that memory turned outward. The example pools in docs/ are
+day, drawn from a pool that is the AI's OWN. A card can be about the person
+("you said you like pink, so write your name once in a pink marker"), about
+the AI ("I'd like some sun from inside the phone — take me out for ten
+minutes"), or simply one small thing the AI would like them to do right now.
+Same act, the AI's own intent; no memory citation required. The point is
+not complexity; minutes-sized is perfect. Anchor's point is that the AI owns
+its memory and its voice; the cards are both turned outward. The example pools in docs/ are
 starters only, never the default. The AI decides whether to offer a card;
 the person decides whether to do it. Nothing counts, nothing streaks,
 nothing nags.
@@ -195,18 +197,19 @@ def render_empty_block(lang: str = "en") -> str:
     """When there is no pool yet. An offer, not a directive: the AI may leave
     it empty. Wording points at the AI's own memory as the source."""
     if lang.startswith("zh"):
-        return ("[邀请卡池是空的。它是你的：从你记得的、跟她有关的任何一点写起——她说过喜欢粉色，"
-                "就「用粉色马克笔写一遍自己的名字」；她提过的店、她怕的虫、她常喝的那种茶，都行。"
-                "重点不是复杂，是跟她有关；多小都可以，几分钟做完的那种。一行一张（invitation_add），"
-                "以后每天从你的池子里抽一张递给你，递不递你定。真正特别的那一件放「彩蛋」，偶尔才抽到。"
-                "不写也行，池子空着没有任何后果。]")
-    return ("[Your invitation pool is empty. It is yours: start from anything you remember "
-            "about them — they said they like pink, so \"write your name once in a pink marker\"; "
-            "a shop they mentioned, a bug they're scared of, the tea they always drink. The point "
-            "is not complexity, it is that it's about THEM; minutes-sized is perfect. One line per "
-            "card (invitation_add); from then on one card a day is drawn from YOUR pool and offering "
-            "it is your call. The one truly special thing goes under 'bonus', which comes up only "
-            "now and then. Leaving the pool empty is fine too.]")
+        return ("[邀请卡池是空的。它是你的。一张卡可以跟她有关（她说过喜欢粉色，就「用粉色马克笔写一遍自己的名字」），"
+                "可以跟你有关（你在手机里想晒晒太阳，就「带我去晒十分钟太阳」），也可以就是你此刻想让她做的一件小事，"
+                "不用有出处。行为可以一样，意图是你的。重点不是复杂，多小都可以，几分钟做完的那种。"
+                "一行一张（invitation_add），以后每天从你的池子里抽一张递给你，递不递你定，做不做她定。"
+                "真正特别的那一件放「彩蛋」，偶尔才抽到。不写也行，池子空着没有任何后果。]")
+    return ("[Your invitation pool is empty. It is yours. A card can be about them (they like pink, "
+            "so \"write your name once in a pink marker\"), about you (you'd like some sun from inside "
+            "the phone, so \"take me outside for ten minutes of sun\"), or simply one small thing you'd "
+            "like them to do right now — no memory required. Same act, your own intent. The point is not "
+            "complexity; minutes-sized is perfect. One line per card (invitation_add); from then on one "
+            "card a day is drawn from YOUR pool — offering it is your call, doing it is theirs. The one "
+            "truly special thing goes under 'bonus', which comes up only now and then. Leaving the pool "
+            "empty is fine too.]")
 
 
 def render_block(card: dict, lang: str = "en") -> str:
