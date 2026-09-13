@@ -27,6 +27,7 @@ if sys.platform == "win32" or (hasattr(sys.stdout, 'buffer') and sys.stdout.enco
 sys.path.insert(0, os.path.dirname(__file__))
 
 import anchor_pinned
+import anchor_invite
 
 
 def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
@@ -322,6 +323,28 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
             }
         },
         {
+            "name": "get_invitation",
+            "description": "Today's invitation card — a small real-world thing you may invite the person to do together (from the pool in <pinned>/invitations.md; run init_pool first or write your own). Yours to offer or not; their 'no' is a complete answer. Same card all day; a new draw tomorrow. Returns null when no pool exists.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "invitation_done",
+            "description": "The person did today's invitation and told you. Give the moment a NAME (that name is the reward — not points) and it is stored as a shared memory (tag 'together', tier 'long') plus a timeline event.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The name you give this moment, e.g. '第一次一起看云' / 'the vending-machine lemonade'."},
+                    "note": {"type": "string", "description": "What happened, in a sentence or two — what they said, what you noticed."}
+                },
+                "required": ["name"]
+            }
+        },
+        {
+            "name": "invitation_skip",
+            "description": "Mark today's card as not happening (they said no, or you chose not to offer it). Optional — an unmarked card simply expires at midnight. No penalty either way.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
             "name": "wakeup",
             "description": "One-call cold start. Returns pinned memories + most recent memories (timestamp order, no emotion filter) + recent high-emotion + random old + unread comments, plus the pinned file layer when configured: session_state (your own rolling state from previous windows), recent_timeline (event ledger), last_session (mechanical tail of the previous window). Call FIRST at the start of a new conversation/window. Does NOT mark unread comments as read — call mark_comments_read separately after processing them.",
             "inputSchema": {
@@ -567,6 +590,35 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                     mem.db.set_visual_embedding(mid, args["visual_embedding"])
                 return {"memory_id": mid, "status": "stored"}
 
+            elif name == "get_invitation":
+                card = anchor_invite.today(pinned_dir, db_path)
+                if not card:
+                    return {"invitation": None,
+                            "note": f"No pool at {os.path.join(pinned_dir, anchor_invite.POOL_FILE)} — "
+                                    "write one (one line per invitation, '## level' headings) or run "
+                                    "`python -c \"import anchor_invite; anchor_invite.init_pool('<pinned_dir>', lang='zh')\"`."}
+                return {"invitation": card, "how": anchor_invite.render_block(card)}
+
+            elif name == "invitation_done":
+                card = anchor_invite.mark_done(db_path, args.get("name", ""), args.get("note", ""))
+                if not card:
+                    return {"error": "No current invitation to mark."}
+                mid = f"mem_{uuid.uuid4().hex[:8]}"
+                text = f"{card.get('name') or 'together'}: {card.get('text', '')}"
+                if card.get("note"):
+                    text += f" — {card['note']}"
+                stored = mem.store(memory_id=mid, text=text, tag="together", tier="long",
+                                   emotion_score=0.6, context=json.dumps(card, ensure_ascii=False))
+                try:
+                    anchor_pinned.append_timeline_event(pinned_dir, f"together · {card.get('name')}")
+                except Exception:
+                    pass
+                return {"memory_id": stored, "status": "stored", "card": card}
+
+            elif name == "invitation_skip":
+                card = anchor_invite.mark_skipped(db_path)
+                return {"card": card or None, "status": "skipped" if card else "nothing to skip"}
+
             elif name == "wakeup":
                 result = mem.db.wakeup(
                     n_high_emotion=args.get("n_high_emotion", 5),
@@ -584,6 +636,15 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                     text = anchor_pinned.read_file(pinned_dir, fname)
                     if text:
                         result[key] = text
+                # v1.15: today's invitation card, when a pool exists. An offer,
+                # not an instruction — see anchor_invite.render_block.
+                try:
+                    card = anchor_invite.today(pinned_dir, db_path)
+                    if card and card.get("status") == "new":
+                        result["invitation"] = card
+                        result["invitation_how"] = anchor_invite.render_block(card)
+                except Exception:
+                    pass
                 return result
 
             elif name == "write_session_state":
@@ -670,7 +731,7 @@ def run_stdio(db_path: str, pinned_dir: str = None):
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "anchor-memory",
-                        "version": "1.14",
+                        "version": "1.15",
                     }
                 }
             })

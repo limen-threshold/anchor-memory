@@ -150,6 +150,10 @@ All knobs live on the `AnchorMemory` instance; `same_day_cap = 0` restores plain
 
 `read_memories_by_date` (MCP) / `mem.read_by_date("3月6日")`: memories in a date range, oldest first. For "what happened on the 6th" — a question similarity ranking is bad at. Understands ISO, Chinese (`3月6日` / `三月六日` / `昨天` / `上周` / `上个月` / `3月`), English (`March 6` / `yesterday` / `last week`), and `最近` / `recently` (last three days). Local calendar boundaries, shifted to UTC to match stored timestamps.
 
+### Invitations (v1.15+)
+
+"Want to do something small together?" — one card a day from a plain-text pool (`<pinned>/invitations.md`; examples in `docs/`), drawn by `anchor_invite.py`. The AI may offer it or not; the person may do it or not. If they do, `invitation_done(name, note)` stores the moment as a **named** shared memory (tag `together`) — the reward is the name, not points. `wakeup()` and the proxy hand the card over once a day. No streaks, no scores, no GPS. Details: [docs/release-notes/v1.15.md](docs/release-notes/v1.15.md).
+
 ### Keyword Lane Notes (v1.14+)
 
 - `jieba` is now **required**. Without it CJK text has no word boundaries and keyword search on Chinese memories almost never matches.
@@ -476,7 +480,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.14](docs/release-notes/v1.14.md).
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.15](docs/release-notes/v1.15.md).
 
 ## Origin
 

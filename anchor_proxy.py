@@ -198,6 +198,30 @@ def build_time_block(state_dir: str, now: datetime = None) -> str:
     return block
 
 
+def build_invitation_block(pinned_dir: str, state_dir: str, now: datetime = None) -> str:
+    """Today's invitation card (v1.15), injected ONCE per day — on the first
+    turn after midnight — so it reads as a card handed over in the morning,
+    not a nag repeated every message. '' when there is no pool, the card is
+    already done/skipped, or it was injected earlier today. See anchor_invite."""
+    try:
+        import anchor_invite
+        card = anchor_invite.today(pinned_dir, state_dir, now=now)
+        if not card:
+            return ""
+        state = anchor_invite._load_state(state_dir)
+        if state.get("injected_date") == card["date"]:
+            return ""
+        block = anchor_invite.render_block(card)
+        if not block:
+            return ""
+        state["injected_date"] = card["date"]
+        anchor_invite._save_state(state_dir, state)
+        return block
+    except Exception as e:
+        print(f"[anchor_proxy] invitation block error (non-fatal): {e}")
+        return ""
+
+
 def get_llm_or_none():
     """The BYO-LLM resolution from anchor_llm (arg → ANCHOR_LLM env →
     ~/.anchor/config.yaml → ANTHROPIC_API_KEY fallback). None when nothing
@@ -311,6 +335,9 @@ def build_turn(mem, llm, pinned_dir: str, state_dir: str, messages: list,
         system = f"{system}\n\n---\n\n{client_system}" if system else client_system
 
     dynamic = build_time_block(state_dir)
+    invite = build_invitation_block(pinned_dir, state_dir)
+    if invite:
+        dynamic += "\n\n" + invite
     recall = build_recall_block(mem, llm, messages)
     if recall:
         dynamic += "\n\n" + recall
