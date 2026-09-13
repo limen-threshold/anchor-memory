@@ -1,8 +1,8 @@
 chromadb>=0.4.0
 sentence-transformers>=2.2.0
 
-# Optional — Chinese keyword tokenization for keyword_search.
-# Without jieba, multi-character Chinese phrases won't tokenize properly
-# (whole phrase becomes one LIKE %...% token, which rarely matches).
-# Install if your memories or queries contain Chinese.
+# Chinese / Japanese word segmentation for the keyword lane.
+# v1.14: required, not optional. Without it CJK text has no word boundaries,
+# the whole phrase becomes one LIKE %...% token, and keyword search on CJK
+# memories almost never matches. Harmless for pure-English data.
 jieba>=0.42

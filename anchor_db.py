@@ -15,6 +15,11 @@ class AnchorDB:
 
     MAX_EDGE_WEIGHT = 10.0  # Synaptic saturation
 
+    # Single-character tokens the keyword lane may keep (see _tokenize_query).
+    # Class-level default so it exists on every instance; assign a set on the
+    # instance to customize: ``mem.db.keyword_single_char_allow = {"凤"}``.
+    keyword_single_char_allow: set = frozenset()
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._init_tables()
@@ -302,11 +307,16 @@ class AnchorDB:
         Chinese/English text is also handled correctly.
 
         Falls back to whitespace+punctuation split if jieba is not installed.
-        Single Chinese characters are kept (semantically meaningful in CJK);
-        non-Chinese tokens require >= 2 chars to filter out noise like "I", "a".
+
+        v1.14: every token needs >= 2 chars — single CJK characters included.
+        A lone character LIKE-matches as a substring of every compound that
+        contains it ("草" hits 草莓/草稿/草原...), so in production a query
+        like "你给了他草" returned ten keyword hits and none were about grass.
+        The only exemption is ``keyword_single_char_allow`` — a set you can
+        populate with single-character proper names (e.g. {"凤", "聿"}) that
+        genuinely mean one thing in your data.
         """
         import re
-        chinese_re = re.compile(r'[一-鿿]')
 
         try:
             import jieba
@@ -321,9 +331,26 @@ class AnchorDB:
                 continue
             if not re.search(r'\w|[一-鿿]', t):
                 continue
-            if chinese_re.search(t) or len(t) >= 2:
+            if len(t) >= 2 or t in self.keyword_single_char_allow:
                 keywords.append(t)
         return keywords
+
+    def memories_by_date_range(self, start_iso: str, end_iso: str, limit: int = 1000) -> list:
+        """Rows with start_iso <= timestamp < end_iso, oldest first (v1.14).
+
+        Timestamps are ISO strings written by insert() (UTC), so a plain
+        string comparison is chronological. Used by read_memories_by_date —
+        the calendar path: when you know *when*, you don't have to gamble on
+        semantic similarity finding it.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT memory_id, text, timestamp, tag, tier, pinned, emotion_score "
+                "FROM memories WHERE timestamp >= ? AND timestamp < ? "
+                "ORDER BY timestamp ASC LIMIT ?",
+                (start_iso, end_iso, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def keyword_search(self, query: str, limit: int = 5, tag: str = None) -> list:
         """Search memories + annotations by keyword.

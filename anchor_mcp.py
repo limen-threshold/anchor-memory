@@ -120,6 +120,11 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                         "type": "boolean",
                         "description": "Include ranking internals on each result — raw_distance, citation_boost, emotion_boost, final_score, source ('vector'|'keyword'|'associative'), and edge_weight for associative hops. Use to audit why a given result landed at its rank.",
                         "default": False
+                    },
+                    "exclude_tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tags to drop before result slots are allocated (they never consume a slot). Use for material that is stored but must not compete in this context, e.g. a raw-transcript tag."
                     }
                 },
                 "required": ["query"]
@@ -148,7 +153,9 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                     "tag": {"type": "string"},
                     "associate": {"type": "boolean", "default": True},
                     "hebbian": {"type": "boolean", "default": True},
-                    "include_context": {"type": "boolean", "default": False}
+                    "include_context": {"type": "boolean", "default": False},
+                    "exclude_tags": {"type": "array", "items": {"type": "string"},
+                                     "description": "Tags dropped before slots are allocated (see search_memory)."}
                 },
                 "required": ["queries"]
             }
@@ -302,6 +309,19 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
             }
         },
         {
+            "name": "read_memories_by_date",
+            "description": "Read memories by calendar date, oldest first — the path for 'what happened on the 6th', which semantic search is bad at. Accepts ISO (2026-03-06), Chinese (3月6日 / 三月六日 / 昨天 / 上周 / 上个月 / 3月), English (March 6 / yesterday / last week), and '最近'/'recently' (last three days). Paginated, 20 per page.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "A date expression, e.g. '2026-03-06', '3月6日', 'March 6', '昨天', '上周'."},
+                    "days": {"type": "integer", "description": "Extend a single-day match forward by this many days (max 31).", "default": 1},
+                    "page": {"type": "integer", "description": "Page number (20 memories per page).", "default": 1}
+                },
+                "required": ["date"]
+            }
+        },
+        {
             "name": "wakeup",
             "description": "One-call cold start. Returns pinned memories + most recent memories (timestamp order, no emotion filter) + recent high-emotion + random old + unread comments, plus the pinned file layer when configured: session_state (your own rolling state from previous windows), recent_timeline (event ledger), last_session (mechanical tail of the previous window). Call FIRST at the start of a new conversation/window. Does NOT mark unread comments as read — call mark_comments_read separately after processing them.",
             "inputSchema": {
@@ -414,7 +434,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
         try:
             if name == "store_memory":
                 mid = f"mem_{uuid.uuid4().hex[:8]}"
-                mem.store(
+                stored_id = mem.store(
                     memory_id=mid,
                     text=args["text"],
                     tag=args.get("tag", "general"),
@@ -423,6 +443,11 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                     connect_to=args.get("connect_to"),
                     context=args.get("context", ""),
                 )
+                if stored_id != mid:
+                    # v1.14 near-duplicate gate: an existing memory already says
+                    # this; it was cited instead of duplicated. Honest receipt.
+                    return {"memory_id": stored_id, "status": "merged_into_existing",
+                            "note": "Near-duplicate of an existing memory; that one was cited instead. Nothing new stored."}
                 return {"memory_id": mid, "status": "stored"}
 
             elif name == "search_memory":
@@ -433,6 +458,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                     associate=args.get("associate", True),
                     hebbian=args.get("hebbian", True),
                     debug=args.get("debug", False),
+                    exclude_tags=tuple(args.get("exclude_tags") or ()),
                 )
                 return {"memories": results}
 
@@ -445,8 +471,29 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                     associate=args.get("associate", True),
                     hebbian=args.get("hebbian", True),
                     include_context=args.get("include_context", False),
+                    exclude_tags=tuple(args.get("exclude_tags") or ()),
                 )
                 return {"memories": results}
+
+            elif name == "read_memories_by_date":
+                start_iso, end_iso, rows = mem.read_by_date(
+                    args.get("date", ""), days=args.get("days", 1))
+                if rows is None:
+                    return {"error": f"Couldn't parse the date '{args.get('date', '')}'. "
+                                     "Try '2026-03-06', '3月6日', 'March 6', '昨天', '上周'."}
+                page_size = 20
+                page = max(1, int(args.get("page") or 1))
+                pages = max(1, (len(rows) + page_size - 1) // page_size)
+                chunk = rows[(page - 1) * page_size: page * page_size]
+                out = []
+                for r in chunk:
+                    text = (r.get("text") or "").replace("\n", " ")
+                    if len(text) > 240:
+                        text = text[:240] + "…"
+                    out.append({"memory_id": r["memory_id"], "timestamp": str(r.get("timestamp"))[:16],
+                                "tag": r.get("tag"), "tier": r.get("tier"), "text": text})
+                return {"range": [start_iso[:10], end_iso[:10]], "total": len(rows),
+                        "page": page, "pages": pages, "memories": out}
 
             elif name == "connect_memories":
                 mem.db.connect(
@@ -623,7 +670,7 @@ def run_stdio(db_path: str, pinned_dir: str = None):
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "anchor-memory",
-                        "version": "1.13",
+                        "version": "1.14",
                     }
                 }
             })

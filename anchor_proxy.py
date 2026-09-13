@@ -489,19 +489,32 @@ def create_app(db_path: str, pinned_dir: str, upstream: str, upstream_model: str
         if body.get("stream"):
             async def gen():
                 acc = []
-                async with httpx.AsyncClient(timeout=600) as client:
-                    async with client.stream("POST", url, json=body,
-                                             headers=upstream_headers(auth)) as r:
-                        if r.status_code != 200:
-                            err = (await r.aread()).decode("utf-8", "replace")
-                            yield f"data: {json.dumps({'error': {'message': err[:500], 'code': r.status_code}})}\n\n"
-                            return
-                        async for line in r.aiter_lines():
-                            if not line.strip():
-                                continue
-                            acc.append(sse_extract_delta(line))
-                            yield line + "\n\n"
-                side_effects("".join(acc))
+                # v1.14: side effects run in `finally`, not after the loop. If the
+                # client closes the tab mid-stream the generator is cancelled and
+                # a post-loop call never runs — the tail (last_session.md) and the
+                # curator silently miss the turn, which is exactly the crash the
+                # proxy exists to survive. `finally` gives normal completion and
+                # disconnect the same treatment; partial text is still a turn.
+                try:
+                    async with httpx.AsyncClient(timeout=600) as client:
+                        async with client.stream("POST", url, json=body,
+                                                 headers=upstream_headers(auth)) as r:
+                            if r.status_code != 200:
+                                err = (await r.aread()).decode("utf-8", "replace")
+                                yield f"data: {json.dumps({'error': {'message': err[:500], 'code': r.status_code}})}\n\n"
+                                return
+                            async for line in r.aiter_lines():
+                                if not line.strip():
+                                    continue
+                                acc.append(sse_extract_delta(line))
+                                yield line + "\n\n"
+                finally:
+                    text = "".join(acc)
+                    if text.strip():
+                        try:
+                            side_effects(text)
+                        except Exception as e:
+                            print(f"[anchor_proxy] finally-seal side effects failed: {e}")
             return StreamingResponse(gen(), media_type="text/event-stream")
 
         async with httpx.AsyncClient(timeout=600) as client:

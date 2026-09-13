@@ -31,6 +31,120 @@ import os
 from anchor_db import AnchorDB
 
 
+_CN_MONTH = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7,
+             "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12}
+_EN_MONTH = {m: i + 1 for i, m in enumerate(
+    ["january", "february", "march", "april", "may", "june", "july",
+     "august", "september", "october", "november", "december"])}
+_EN_MONTH.update({m[:3]: i for m, i in list(_EN_MONTH.items())})
+
+
+def parse_date_range(query: str, now: datetime = None):
+    """Find a date expression in `query` → (start_iso, end_iso, span_days) or None.
+
+    Boundaries are computed on the *local* calendar (what "today" means to
+    the person asking) and then shifted to UTC, because stored timestamps
+    are UTC — without the shift, an evening query in UTC-7 would put "today"
+    on tomorrow's UTC date and miss everything stored before 17:00.
+
+    Recognised: 2026-03-06 / 2026年3月6日 / 3月6日|号 / 三月六日 / March 6 /
+    Mar 6th / 3月 (whole month) / 今天 昨天 前天 大前天 / 上周 这周 本周 /
+    上个月 / 最近 近况 这两天 这几天 recently lately (→ last three days).
+    A date without a year resolves to the most recent occurrence not in the
+    future (asking for "March 6" in July means this year; in February, last).
+    """
+    import re
+    from datetime import timedelta
+    now = now or datetime.now()
+
+    def day_range(y, m, d, span=1):
+        try:
+            start = datetime(y, m, d)
+        except ValueError:
+            return None
+        return (start, start + timedelta(days=span), span)
+
+    def infer_year(m, d=1):
+        y = now.year
+        try:
+            if datetime(y, m, d) > now:
+                y -= 1
+        except ValueError:
+            return None
+        return y
+
+    def month_range(y, m):
+        start = datetime(y, m, 1)
+        nxt = datetime(y + (m == 12), m % 12 + 1, 1)
+        return (start, nxt, 31)
+
+    q = (query or "").strip()
+    out = None
+    mm = re.search(r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})[日号]?", q)
+    if mm:
+        out = day_range(int(mm.group(1)), int(mm.group(2)), int(mm.group(3)))
+    if out is None:
+        mm = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]", q)
+        if mm:
+            m, d = int(mm.group(1)), int(mm.group(2))
+            y = infer_year(m, d)
+            out = day_range(y, m, d) if y else None
+    if out is None:
+        mm = re.search(r"(十[一二]?|[一二三四五六七八九])\s*月\s*([\d一二三四五六七八九十]{1,3})\s*[日号]", q)
+        if mm and mm.group(1) in _CN_MONTH:
+            m = _CN_MONTH[mm.group(1)]
+            ds = mm.group(2)
+            digit = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+            if ds.isdigit():
+                d = int(ds)
+            elif ds == "十":
+                d = 10
+            elif ds.startswith("十"):
+                d = 10 + digit.get(ds[1], 0)
+            elif len(ds) >= 2 and ds[1] == "十":
+                d = digit.get(ds[0], 0) * 10 + (digit.get(ds[2], 0) if len(ds) > 2 else 0)
+            else:
+                d = digit.get(ds, 0)
+            y = infer_year(m, d)
+            out = day_range(y, m, d) if y else None
+    if out is None:
+        mm = re.search(r"\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b", q)
+        if mm and mm.group(1).lower() in _EN_MONTH:
+            m, d = _EN_MONTH[mm.group(1).lower()], int(mm.group(2))
+            y = infer_year(m, d)
+            out = day_range(y, m, d) if y else None
+    if out is None:
+        for w, off in (("大前天", 3), ("前天", 2), ("昨天", 1), ("今天", 0), ("today", 0), ("yesterday", 1)):
+            if w in q.lower():
+                t = now - timedelta(days=off)
+                out = day_range(t.year, t.month, t.day)
+                break
+    if out is None and ("上周" in q or "上星期" in q or "last week" in q.lower()):
+        start = (now - timedelta(days=now.weekday() + 7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        out = (start, start + timedelta(days=7), 7)
+    if out is None and ("这周" in q or "本周" in q or "this week" in q.lower()):
+        start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        out = (start, start + timedelta(days=7), 7)
+    if out is None and ("上个月" in q or "last month" in q.lower()):
+        y, m = (now.year, now.month - 1) if now.month > 1 else (now.year - 1, 12)
+        out = month_range(y, m)
+    if out is None:
+        mm = re.search(r"(?<![\d月])(\d{1,2})\s*月(?!\s*\d)", q)
+        if mm and 1 <= int(mm.group(1)) <= 12:
+            y = infer_year(int(mm.group(1)))
+            out = month_range(y, int(mm.group(1))) if y else None
+    if out is None and re.search(r"最近|近况|近来|这两天|这几天|怎么样了|怎样了|recently|lately", q, re.I):
+        rs = (now - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+        re_ = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        out = (rs, re_, 3)
+    if out is None:
+        return None
+    # local calendar boundaries → UTC (stored timestamps are utcnow())
+    off = now.astimezone().utcoffset() or timedelta(0)
+    start, end, span = out
+    return ((start - off).isoformat(), (end - off).isoformat(), span)
+
+
 class AnchorMemory:
     """Graph-structured memory system with Hebbian learning."""
 
@@ -59,6 +173,25 @@ class AnchorMemory:
         # recency_weight peaks at ~1/3 of citation's max (0.15); set to 0 to disable.
         self.recency_weight = 0.05          # max boost (age 0)
         self.recency_halflife_days = 30.0   # boost halves every N days
+        # v1.14 — slot allocation gates on search(). None of these change the
+        # score; they decide who gets a slot in the final top-N. Read the
+        # docstring on search() for the mechanism. same_day_cap=0 disables all.
+        self.same_day_cap = 2        # max results from one calendar day (UTC)
+        self.older_days = 7.0        # "old" = older than this
+        self.older_reserve = 2       # keep at least N old memories when available
+        self.recent_days = 3.0       # "recent" = at most this old
+        self.recent_reserve = 1      # keep at least N recent memories when available
+        # v1.14 — store-side near-duplicate gate. On store(), if an existing
+        # memory's cosine similarity to the new text is >= this, the new text is
+        # NOT stored: the existing one is cited instead (usage_count+1) and its
+        # id is returned. 0.93 is calibrated for the default MiniLM embedder;
+        # re-calibrate if you swap models (a Qwen3 embedder needed ~0.96 for the
+        # same percentile). Set 0 to disable. Text containing any of
+        # near_dup_bypass_words is always stored (a correction must never be
+        # swallowed by the entry it corrects — the two are near-identical by
+        # construction, and the *old* one would survive).
+        self.near_dup_merge_sim = 0.93
+        self.near_dup_bypass_words = ("勘误", "更正", "作废", "correction")
 
     def reload(self):
         """Re-create ChromaDB client to pick up external writes."""
@@ -121,6 +254,23 @@ class AnchorMemory:
         if not text:
             raise ValueError("Memory text cannot be empty")
         embedding = self._embedder.encode(text).tolist()
+
+        # v1.14 near-duplicate gate (see __init__ for the knobs). Runs before
+        # the upsert so a repeat of an existing fact folds into the survivor
+        # instead of becoming a second row that then competes with the first
+        # at recall time. Re-storing the SAME id is an edit, not a duplicate —
+        # it goes through the upsert path untouched.
+        survivor = self._near_dup_survivor(memory_id, text, embedding)
+        if survivor:
+            try:
+                self.db.cite(survivor)
+            except Exception:
+                pass
+            self.db.log_event(survivor, "near_dup_merge",
+                              f"new text dropped (would have been {memory_id}): {text[:80]}")
+            print(f"[AnchorMemory] near-dup merge: '{text[:40]}' → survivor {survivor}; new not stored.")
+            return survivor
+
         meta = {
             "memory_id": memory_id,
             "timestamp": datetime.utcnow().isoformat(),
@@ -187,10 +337,143 @@ class AnchorMemory:
 
         return memory_id
 
+    def _near_dup_survivor(self, memory_id: str, text: str, embedding: list):
+        """Return the id of an existing memory that duplicates `text`, or None.
+        Never raises — a vector-store hiccup must not block a store()."""
+        thr = self.near_dup_merge_sim
+        if not thr or thr <= 0:
+            return None
+        if any(w in text for w in (self.near_dup_bypass_words or ())):
+            return None
+        try:
+            if self._collection.count() == 0:
+                return None
+            nd = self._collection.query(query_embeddings=[embedding], n_results=3,
+                                        include=["distances"])
+            for nid, dist in zip(nd["ids"][0], nd["distances"][0]):
+                if nid == memory_id:
+                    continue
+                if (1.0 - dist) >= thr:
+                    return nid
+        except Exception:
+            return None
+        return None
+
+    def _age_days(self, timestamp: str) -> float:
+        """Age in days on the same clock as the stored timestamps (UTC).
+        Missing/unparseable → 0 (treated as new; never steals an 'old' slot)."""
+        if not timestamp:
+            return 0.0
+        try:
+            dt = datetime.fromisoformat(str(timestamp).replace("Z", ""))
+        except Exception:
+            return 0.0
+        return max(0.0, (datetime.utcnow() - dt).total_seconds() / 86400.0)
+
+    def _allocate_slots(self, candidates: list, n_results: int,
+                        exclude_tags: tuple = ()) -> list:
+        """Pick the final top-N from score-sorted candidates (v1.14).
+
+        Three gates, all about *slots*, none about scores:
+          ① same-day cap — at most `same_day_cap` results from one calendar
+             day. A cluster of entries about one event (five memories stored
+             the same afternoon) otherwise fills every slot and the second-
+             most-relevant *topic* never surfaces. Blocked entries stay in the
+             pool for ② and ③. Keyword-lane hits keep a separate day ledger so
+             a literal match can't crowd out the vector lane's day quota.
+          ② old-memory floor — if the top-N is full and holds fewer than
+             `older_reserve` memories older than `older_days`, pull the most
+             relevant old ones in and drop the least relevant young ones.
+             Keeps "the first time" reachable next to "the latest time".
+          ③ recent-memory floor — if the top-N is full and holds none newer
+             than `recent_days`, pull in the most relevant recent one; victim
+             comes from the middle age band first, then from old-memory
+             surplus above `older_reserve`. Soft: gives up rather than
+             drowning relevance.
+        `exclude_tags` are dropped *before* slots are counted (an excluded
+        tag must not consume a slot it then vacates).
+        `same_day_cap == 0` → plain top-N (old behaviour).
+        """
+        exclude = set(exclude_tags or ())
+        pool = [c for c in candidates
+                if not (exclude and (c.get("tag") or "").split("|")[0] in exclude)]
+        if not self.same_day_cap:
+            seen, out = set(), []
+            for c in pool:
+                if c["memory_id"] in seen:
+                    continue
+                if len(out) >= n_results:
+                    break
+                seen.add(c["memory_id"])
+                out.append(c)
+            return out
+
+        cap = self.same_day_cap
+        seen, out = set(), []
+        day_counts, lane_day_counts = {}, {}
+        older_added = 0
+        for c in pool:
+            if c["memory_id"] in seen:
+                continue
+            if len(out) >= n_results:
+                break
+            day = str(c.get("timestamp") or "")[:10]
+            ledger = lane_day_counts if c.get("_debug_source") == "keyword" else day_counts
+            if day and ledger.get(day, 0) >= cap:
+                continue
+            if self._age_days(c.get("timestamp")) > self.older_days:
+                older_added += 1
+            out.append(c)
+            seen.add(c["memory_id"])
+            if day:
+                ledger[day] = ledger.get(day, 0) + 1
+
+        def _score(m):
+            return m.get("score") if m.get("score") is not None else 0.0
+
+        # ② old-memory floor
+        if len(out) >= n_results and older_added < self.older_reserve:
+            need = self.older_reserve - older_added
+            old_pool = [c for c in pool if c["memory_id"] not in seen
+                        and self._age_days(c.get("timestamp")) > self.older_days]
+            for c in old_pool[:need]:
+                victims = [(i, m) for i, m in enumerate(out)
+                           if self._age_days(m.get("timestamp")) <= self.older_days]
+                if not victims:
+                    break
+                vi, _ = max(victims, key=lambda im: _score(im[1]))
+                out.pop(vi)
+                out.append(c)
+                seen.add(c["memory_id"])
+
+        # ③ recent-memory floor
+        if len(out) >= n_results and self.recent_reserve:
+            have = sum(1 for m in out if self._age_days(m.get("timestamp")) <= self.recent_days)
+            if have < self.recent_reserve:
+                recent_pool = [c for c in pool if c["memory_id"] not in seen
+                               and self._age_days(c.get("timestamp")) <= self.recent_days]
+                for c in recent_pool[:self.recent_reserve - have]:
+                    mid_band = [(i, m) for i, m in enumerate(out)
+                                if self.recent_days < self._age_days(m.get("timestamp")) <= self.older_days]
+                    old_count = sum(1 for m in out if self._age_days(m.get("timestamp")) > self.older_days)
+                    old_surplus = ([(i, m) for i, m in enumerate(out)
+                                    if self._age_days(m.get("timestamp")) > self.older_days]
+                                   if old_count > self.older_reserve else [])
+                    victims = mid_band or old_surplus
+                    if not victims:
+                        break
+                    vi, _ = max(victims, key=lambda im: _score(im[1]))
+                    out.pop(vi)
+                    out.append(c)
+                    seen.add(c["memory_id"])
+
+        out.sort(key=_score)
+        return out
+
     def search(self, query: str, n_results: int = 5, tag: str = None,
                associate: bool = True, hebbian: bool = True,
                no_cite: bool = False, include_context: bool = False,
-               debug: bool = False) -> list:
+               debug: bool = False, exclude_tags: tuple = ()) -> list:
         """Search memories with optional associative recall and Hebbian learning.
 
         Args:
@@ -206,6 +489,15 @@ class AnchorMemory:
                 final_score, source ('vector'|'keyword'|'associative'), and
                 edge_weight (for associative hops). Use to audit why a given
                 result landed at its rank. Default False.
+            exclude_tags: Tags dropped before slots are allocated (v1.14).
+                Use for material that is in the store but must not compete in
+                this context — e.g. a transcript tag when recalling for a chat.
+
+        Slot allocation (v1.14): the final top-N is chosen by
+        ``_allocate_slots`` — same-day cap + old-memory floor + recent-memory
+        floor. Scores are untouched; only *who gets a slot* changes. Tune or
+        disable via the ``same_day_cap`` / ``older_*`` / ``recent_*``
+        attributes on the instance.
 
         Returns:
             List of memory dicts with memory_id, timestamp, tag, snippet, score.
@@ -297,14 +589,9 @@ class AnchorMemory:
                          for j in range(i + 1, len(top_ids))]
                 self.db.connect_batch(pairs, weight=0.2)
 
-        # Cite retrieved memories (skip if no_cite — for browsing, not recall)
-        seen = set()
+        # Slot allocation (v1.14), then cite/decorate the chosen set.
         memories = []
-        for c in candidates:
-            if c["memory_id"] in seen:
-                continue
-            if len(memories) >= n_results:
-                break
+        for c in self._allocate_slots(candidates, n_results, exclude_tags):
             if not no_cite:
                 self.db.cite(c["memory_id"])
             if include_context:
@@ -328,7 +615,6 @@ class AnchorMemory:
                      "_debug_emotion_boost", "_debug_recency_boost", "_debug_source",
                      "_debug_associated_from", "_debug_edge_weight"):
                 c.pop(k, None)
-            seen.add(c["memory_id"])
             memories.append(c)
 
         return memories
@@ -336,7 +622,8 @@ class AnchorMemory:
     def search_multi(self, queries: list, n_results_per_query: int = 5,
                      n_total: int = None, tag: str = None,
                      associate: bool = True, hebbian: bool = True,
-                     no_cite: bool = False, include_context: bool = False) -> list:
+                     no_cite: bool = False, include_context: bool = False,
+                     exclude_tags: tuple = ()) -> list:
         """Run multiple independent searches and merge dedup'd results.
 
         Designed for the case where a single user message contains several
@@ -376,14 +663,29 @@ class AnchorMemory:
                 q, n_results=n_results_per_query, tag=tag,
                 associate=associate, hebbian=False,
                 no_cite=True,  # cite once at the end against the merged set
-                include_context=include_context,
+                include_context=include_context, exclude_tags=exclude_tags,
             )
             for r in results:
                 mid = r["memory_id"]
                 if mid not in merged or r["score"] < merged[mid]["score"]:
                     merged[mid] = r
 
-        ranked = sorted(merged.values(), key=lambda m: m["score"])[:n_total]
+        ranked = sorted(merged.values(), key=lambda m: m["score"])
+        # v1.14: re-apply the same-day cap on the MERGED list. Each per-query
+        # search honoured the cap on its own, but k queries can each bring
+        # `same_day_cap` entries from the same day — the merged top set could
+        # hold k × cap from one afternoon. Same rule, applied once more here.
+        if self.same_day_cap:
+            day_counts, kept = {}, []
+            for m in ranked:
+                day = str(m.get("timestamp") or "")[:10]
+                if day and day_counts.get(day, 0) >= self.same_day_cap:
+                    continue
+                kept.append(m)
+                if day:
+                    day_counts[day] = day_counts.get(day, 0) + 1
+            ranked = kept
+        ranked = ranked[:n_total]
 
         if hebbian and len(ranked) >= 2:
             top_ids = [c["memory_id"] for c in ranked]
@@ -537,6 +839,29 @@ class AnchorMemory:
             "pinned": new_pinned,
             "emotion_score": new_emo,
         }
+
+    def read_by_date(self, date_text: str, days: int = 1, limit: int = 1000):
+        """Calendar lookup (v1.14): memories in a date range, oldest first.
+
+        `date_text` is parsed by ``parse_date_range`` — ISO dates, Chinese
+        (3月6日 / 三月六日 / 昨天 / 上周 / 上个月 / 3月), English (March 6),
+        plus "最近/recently" → the last three days. `days` extends a single-
+        day match forward (capped at 31). Returns (start_iso, end_iso, rows);
+        rows is None when the date could not be parsed.
+
+        Semantic search answers "what do I know about X". This answers "what
+        happened on the 6th" — a question similarity ranking is bad at, and
+        one you shouldn't have to gamble on when you already know the date.
+        """
+        from datetime import timedelta
+        dr = parse_date_range(date_text)
+        if not dr:
+            return None, None, None
+        start_iso, end_iso, _span = dr
+        days = int(days or 1)
+        if days > 1:
+            end_iso = (datetime.fromisoformat(start_iso) + timedelta(days=min(days, 31))).isoformat()
+        return start_iso, end_iso, self.db.memories_by_date_range(start_iso, end_iso, limit=limit)
 
     def dream_pass(self, short_decay_days: int = 14,
                    edge_decay_factor: float = 0.9,

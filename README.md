@@ -131,6 +131,30 @@ chooses how. Keeps Anchor LLM-agnostic and zero-cost on this path. The MCP
 tool `search_multi` lets the host AI (Claude / GPT / Gemini / etc.) split
 and pass intents directly, no extra API calls.
 
+### Recall Slot Gates (v1.14+)
+
+Ranking decides *order*; these decide *who gets a slot*. Scores are untouched.
+
+- **Same-day cap** (`same_day_cap`, default 2): at most N results from one calendar day. Five entries stored the same afternoon about one event otherwise fill every slot and the second-most-relevant *topic* never surfaces.
+- **Old-memory floor** (`older_days` / `older_reserve`, 7 / 2): when the pool has them, keep at least two memories older than a week — "the first time" stays reachable next to "the latest time".
+- **Recent-memory floor** (`recent_days` / `recent_reserve`, 3 / 1): keep at least one memory from the last three days when the pool has one, so a fresh event is not drowned by an old cluster.
+- **`exclude_tags`** on `search()` / `search_multi()` / MCP: tags dropped *before* slots are counted, so an excluded transcript can't eat a slot it then vacates.
+
+All knobs live on the `AnchorMemory` instance; `same_day_cap = 0` restores plain top-N. `search_multi` re-applies the cap on the merged list.
+
+### Store-Side Dedup Gate (v1.14+)
+
+`store()` checks the nearest existing memory first. Cosine ≥ `near_dup_merge_sim` (default 0.93 for the default MiniLM embedder; re-calibrate if you swap models) → the new text is not stored, the existing one is cited, and `store()` returns the **survivor's id**. The MCP tool reports `status: merged_into_existing`. Re-storing the same id is an edit and bypasses the gate; so does text containing a word from `near_dup_bypass_words` (`勘误 / 更正 / 作废 / correction`) — a correction is near-identical to the entry it corrects, and without the bypass the *wrong* entry would survive. Set to 0 to disable.
+
+### Calendar Reads (v1.14+)
+
+`read_memories_by_date` (MCP) / `mem.read_by_date("3月6日")`: memories in a date range, oldest first. For "what happened on the 6th" — a question similarity ranking is bad at. Understands ISO, Chinese (`3月6日` / `三月六日` / `昨天` / `上周` / `上个月` / `3月`), English (`March 6` / `yesterday` / `last week`), and `最近` / `recently` (last three days). Local calendar boundaries, shifted to UTC to match stored timestamps.
+
+### Keyword Lane Notes (v1.14+)
+
+- `jieba` is now **required**. Without it CJK text has no word boundaries and keyword search on Chinese memories almost never matches.
+- Single CJK characters no longer count as keywords (`草` would LIKE-match 草莓 / 草稿 / 草原). Exemption: `mem.db.keyword_single_char_allow = {"凤"}` for single-character proper names.
+
 ## Quick Start
 
 ```python
@@ -176,6 +200,7 @@ print(stats)
 ```
 chromadb
 sentence-transformers
+jieba               # CJK word segmentation for the keyword lane (required since v1.14)
 
 # Optional, depending on which LLM provider you use:
 anthropic           # Claude
@@ -451,7 +476,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.9.1](docs/release-notes/v1.9.1.md).
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.14](docs/release-notes/v1.14.md).
 
 ## Origin
 
