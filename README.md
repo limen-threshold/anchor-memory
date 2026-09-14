@@ -268,7 +268,7 @@ Same tools, same data as stdio — only the pipe differs. It serves:
 
 Then give it a public URL. Two ways, and the choice is really one question — *does your machine stay on?*
 
-1. **Your machine + a tunnel** (data stays with you). Zero-install: `ssh -R 80:localhost:3333 nokey@localhost.run` prints an `https://….lhr.life` address (verified end to end with this server). Or `cloudflared tunnel --protocol http2 --url http://127.0.0.1:3333`, or ngrok. Add `https://…/mcp` in claude.ai → Settings → Connectors → *Add custom connector*. Free tunnels get a new random address every start; a named tunnel (Cloudflare with your own domain, ngrok with an account) keeps one.
+1. **Your machine + a tunnel** (data stays with you). Recommended: a free ngrok account gives you one permanent domain, so the address survives restarts and you add it to claude.ai once — `ngrok http 3333 --url https://<your-free-domain>.ngrok-free.dev` (verified end to end with this server). Zero-account alternative: `ssh -R 80:localhost:3333 nokey@localhost.run` (also verified), but its address changes between sessions, so you re-add the connector each time. Add `https://…/mcp` in claude.ai → Customize → Connectors → *Add custom connector* → *No sign-in*. Note that claude.ai's personal plans cannot send a bearer token, so a connector for Chat runs authless: the URL is the key — keep it private and stop the tunnel when you're not using it.
 2. **A small host** (Railway, Fly, a VPS — machine can be off): run with `--host 0.0.0.0 --port $PORT`, put `--db-path` on a persistent volume, set `ANCHOR_HTTP_TOKEN`, and add the host's `https://…/mcp`.
 
 Whichever you pick, `smoke_http.py` exercises both transports against a throwaway db, so you can check the server before you hand the URL to anyone.
