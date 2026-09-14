@@ -2,11 +2,18 @@
 Anchor Memory System — MCP Server
 
 Exposes Anchor Memory as an MCP (Model Context Protocol) server.
-Any MCP-compatible client (Claude Code, claude.ai, LobeHub, SillyTavern)
-can connect and use graph-structured memory with Hebbian learning.
+Any MCP-compatible client can connect and use graph-structured memory with
+Hebbian learning. Two transports, one set of tools:
+
+    stdio  (default) — local hosts that spawn a subprocess: Claude Code,
+                       Claude Desktop, LobeHub, SillyTavern …
+    --http           — hosted clients that can only reach a URL: claude.ai
+                       custom connectors, ChatGPT, any remote MCP client.
+                       Streamable HTTP at /mcp (+ legacy SSE at /sse).
 
 Usage:
-    python anchor_mcp.py [--db-path ./my_memory] [--port 3333]
+    python anchor_mcp.py [--db-path ./my_memory]                      # stdio
+    python anchor_mcp.py --http [--port 3333] [--token SECRET]        # HTTP
 """
 
 import json
@@ -715,8 +722,67 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
+SERVER_VERSION = "1.16.0"
+# Protocol versions this server speaks. The surface is tools-only, so every
+# revision so far is equivalent for us; we echo the client's pick when we know
+# it, otherwise fall back to the oldest (what stdio always answered).
+PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")
+
+
+def handle_message(msg: dict, tools, handle_tool):
+    """One JSON-RPC message in → one JSON-RPC response out (or None for
+    notifications). Shared by the stdio and HTTP transports so the two can
+    never drift — same tools, same answers, only the pipe differs."""
+    method = msg.get("method", "")
+    id_ = msg.get("id")
+    params = msg.get("params") or {}
+
+    if method == "initialize":
+        asked = str(params.get("protocolVersion") or "")
+        return {
+            "jsonrpc": "2.0",
+            "id": id_,
+            "result": {
+                "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
+                "capabilities": {"tools": {}},
+                "serverInfo": {
+                    "name": "anchor-memory",
+                    "version": SERVER_VERSION,
+                }
+            }
+        }
+
+    if method.startswith("notifications/"):
+        return None  # notifications never get a response
+
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": id_, "result": {"tools": tools}}
+
+    if method == "tools/call":
+        tool_name = params.get("name", "")
+        tool_args = params.get("arguments", {}) or {}
+        result = handle_tool(tool_name, tool_args)
+        return {
+            "jsonrpc": "2.0",
+            "id": id_,
+            "result": {
+                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]
+            }
+        }
+
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": id_, "result": {}}
+
+    return {
+        "jsonrpc": "2.0",
+        "id": id_,
+        "error": {"code": -32601, "message": f"Method not found: {method}"}
+    }
+
+
 def run_stdio(db_path: str, pinned_dir: str = None):
-    """Run MCP server over stdio (standard MCP transport)."""
+    """Run MCP server over stdio (standard MCP transport for local hosts:
+    Claude Code, Claude Desktop, LobeHub, SillyTavern …)."""
     tools, handle_tool, mem = create_server(db_path, pinned_dir=pinned_dir)
 
     def send(msg):
@@ -729,60 +795,155 @@ def run_stdio(db_path: str, pinned_dir: str = None):
             return None
         return json.loads(line.strip())
 
-    # MCP initialization
     while True:
         msg = read()
         if msg is None:
             break
+        resp = handle_message(msg, tools, handle_tool)
+        if resp is not None:
+            send(resp)
 
-        method = msg.get("method", "")
-        id_ = msg.get("id")
 
-        if method == "initialize":
-            send({
-                "jsonrpc": "2.0",
-                "id": id_,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {
-                        "name": "anchor-memory",
-                        "version": "1.15.1",
-                    }
-                }
-            })
+def run_http(db_path: str, pinned_dir: str = None, host: str = "127.0.0.1",
+             port: int = 3333, token: str = None, path: str = "/mcp"):
+    """Run MCP server over HTTP — for hosted clients that cannot spawn a local
+    process (claude.ai "custom connectors", ChatGPT, any remote MCP client).
 
-        elif method == "notifications/initialized":
-            pass  # Client acknowledges init
+    Two transports on one port, same tools:
+      * Streamable HTTP (MCP 2025-03-26+):  POST {path}   ← the current spec;
+        claude.ai connectors use this. JSON-RPC in, JSON-RPC out, one request
+        per message. GET {path} is 405 (we don't push server→client events);
+        DELETE {path} ends a session.
+      * Legacy HTTP+SSE (MCP 2024-11-05):   GET /sse opens an event stream
+        that announces a POST endpoint (/messages?sessionId=…); responses to
+        those POSTs travel back over the stream. Kept for hosts that still
+        only speak this.
 
-        elif method == "tools/list":
-            send({
-                "jsonrpc": "2.0",
-                "id": id_,
-                "result": {"tools": tools}
-            })
+    Auth: optional bearer token (`--token` / ANCHOR_HTTP_TOKEN). Without it
+    the URL is the secret — fine behind a random tunnel URL, not fine on a
+    plain public host. Requires: pip install fastapi uvicorn (same as the proxy).
+    """
+    import asyncio
+    import threading
+    try:
+        from fastapi import FastAPI, Request
+        from fastapi.responses import JSONResponse, StreamingResponse, Response
+        from starlette.concurrency import run_in_threadpool
+    except ImportError:
+        sys.exit("--http needs FastAPI/uvicorn:  pip install fastapi uvicorn")
 
-        elif method == "tools/call":
-            tool_name = msg["params"]["name"]
-            tool_args = msg["params"].get("arguments", {})
-            result = handle_tool(tool_name, tool_args)
-            send({
-                "jsonrpc": "2.0",
-                "id": id_,
-                "result": {
-                    "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]
-                }
-            })
+    tools, handle_tool, mem = create_server(db_path, pinned_dir=pinned_dir)
+    # stdio was strictly serial; keep tool calls serial here too (SQLite +
+    # Chroma + one embedder — parallel calls buy nothing and can bite).
+    call_lock = threading.Lock()
 
-        elif method == "ping":
-            send({"jsonrpc": "2.0", "id": id_, "result": {}})
+    def dispatch(msg):
+        with call_lock:
+            return handle_message(msg, tools, handle_tool)
 
-        else:
-            send({
-                "jsonrpc": "2.0",
-                "id": id_,
-                "error": {"code": -32601, "message": f"Method not found: {method}"}
-            })
+    def authed(request) -> bool:
+        if not token:
+            return True
+        hdr = request.headers.get("authorization", "")
+        return hdr == f"Bearer {token}"
+
+    def rpc_error(id_, code, message, status=400):
+        return JSONResponse({"jsonrpc": "2.0", "id": id_,
+                             "error": {"code": code, "message": message}}, status_code=status)
+
+    app = FastAPI(title="Anchor Memory MCP (HTTP)")
+    sse_sessions = {}  # legacy transport: session_id → asyncio.Queue
+
+    @app.get("/")
+    async def root():
+        return {"name": "anchor-memory", "version": SERVER_VERSION,
+                "mcp": path, "legacy_sse": "/sse", "auth": "bearer" if token else "none"}
+
+    # ── Streamable HTTP ──────────────────────────────────────────────────
+    @app.post(path)
+    async def mcp_post(request: Request):
+        if not authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            body = await request.json()
+        except Exception:
+            return rpc_error(None, -32700, "Parse error")
+        msgs = body if isinstance(body, list) else [body]
+        if not msgs or not all(isinstance(m, dict) for m in msgs):
+            return rpc_error(None, -32600, "Invalid Request")
+        responses = []
+        for m in msgs:
+            if "method" not in m:
+                continue  # a client→server response; nothing to do with it
+            r = await run_in_threadpool(dispatch, m)
+            if r is not None:
+                responses.append(r)
+        headers = {}
+        if any(m.get("method") == "initialize" for m in msgs):
+            headers["Mcp-Session-Id"] = uuid.uuid4().hex
+        if not responses:
+            return Response(status_code=202, headers=headers)  # notifications only
+        payload = responses if isinstance(body, list) else responses[0]
+        return JSONResponse(payload, headers=headers)
+
+    @app.get(path)
+    async def mcp_get():
+        # No server-initiated stream: the spec lets a server answer 405 here.
+        return Response(status_code=405)
+
+    @app.delete(path)
+    async def mcp_delete():
+        return Response(status_code=200)
+
+    # ── Legacy HTTP+SSE (2024-11-05) ─────────────────────────────────────
+    @app.get("/sse")
+    async def sse(request: Request):
+        if not authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        session_id = uuid.uuid4().hex
+        q = asyncio.Queue()
+        sse_sessions[session_id] = q
+
+        async def stream():
+            try:
+                yield f"event: endpoint\ndata: /messages?sessionId={session_id}\n\n"
+                while True:
+                    try:
+                        item = await asyncio.wait_for(q.get(), timeout=15)
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    yield f"event: message\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
+            finally:
+                sse_sessions.pop(session_id, None)
+
+        return StreamingResponse(stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.post("/messages")
+    async def sse_messages(request: Request, sessionId: str = ""):
+        if not authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        q = sse_sessions.get(sessionId)
+        if q is None:
+            return JSONResponse({"error": "unknown session"}, status_code=404)
+        try:
+            body = await request.json()
+        except Exception:
+            return rpc_error(None, -32700, "Parse error")
+        msgs = body if isinstance(body, list) else [body]
+        for m in msgs:
+            if not isinstance(m, dict) or "method" not in m:
+                continue
+            r = await run_in_threadpool(dispatch, m)
+            if r is not None:
+                await q.put(r)
+        return Response(status_code=202)
+
+    import uvicorn
+    print(f"[anchor_mcp] HTTP transport on http://{host}:{port}{path}  "
+          f"(legacy SSE: /sse)  auth={'bearer' if token else 'none'}  db={db_path}")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 def format_wakeup_text(data: dict) -> str:
@@ -835,6 +996,17 @@ if __name__ == "__main__":
     parser.add_argument("--wakeup-text", action="store_true",
                         help="Print wakeup() as plain text and exit (for session-start hooks). "
                              "SQLite-only fast path — no embedder load. Does not start the server.")
+    # v1.16: HTTP transport — for claude.ai / hosted clients that can only reach
+    # a URL. Default stays stdio (Claude Code & friends spawn us as a subprocess).
+    parser.add_argument("--http", action="store_true",
+                        help="Serve MCP over HTTP instead of stdio (Streamable HTTP at /mcp, "
+                             "legacy SSE at /sse). Needs: pip install fastapi uvicorn")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="--http bind address (default 127.0.0.1; 0.0.0.0 for a hosted box)")
+    parser.add_argument("--port", type=int, default=3333, help="--http port (default 3333)")
+    parser.add_argument("--token", default=os.getenv("ANCHOR_HTTP_TOKEN") or None,
+                        help="--http bearer token (or env ANCHOR_HTTP_TOKEN). Optional; without it "
+                             "the URL itself is the secret.")
     args = parser.parse_args()
 
     os.makedirs(args.db_path, exist_ok=True)
@@ -852,4 +1024,8 @@ if __name__ == "__main__":
         print(format_wakeup_text(data))
         sys.exit(0)
 
-    run_stdio(args.db_path, pinned_dir=args.pinned_dir)
+    if args.http:
+        run_http(args.db_path, pinned_dir=args.pinned_dir, host=args.host,
+                 port=args.port, token=args.token)
+    else:
+        run_stdio(args.db_path, pinned_dir=args.pinned_dir)

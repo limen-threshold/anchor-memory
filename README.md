@@ -68,7 +68,7 @@ Run periodically (like sleep for the brain):
 ### Cross-Window Continuity (v1.12+)
 - **`anchor_proxy.py`** — an OpenAI-compatible proxy that sits between your frontend (Open WebUI, SillyTavern, LobeHub, …) and any OpenAI-compatible upstream, and makes continuity **machine-side**: every turn it injects the pinned layer (identity + session_state + recent_timeline), current time + interval, and per-turn memory recall; after every response it rewrites the previous-window tail (`last_session.md`) — so continuity survives crashes and closed tabs, and never depends on the model remembering to call a tool.
 - **Zero-LLM floor**: injection, tail, and recall need no LLM beyond your chat model. Two enhancements — intent-split recall and a background curator (judge-store + timeline events) — light up when you configure one via `ANCHOR_LLM` / `~/.anchor/config.yaml` (same BYO-LLM pattern as dream pass; the AI can ask you which provider and write the config itself).
-- **Works without the proxy too**: on web/hosted clients (claude.ai etc.), plain MCP still gives you `wakeup()` cold start, `write_session_state` (the AI's own rolling state, auto-archived, continuity-headered), and all memory tools. Per-turn mechanics need the proxy or your own adapter.
+- **Works without the proxy too**: over plain MCP you still get `wakeup()` cold start, `write_session_state` (the AI's own rolling state, auto-archived, continuity-headered), and all memory tools. Local hosts (Claude Code, Claude Desktop, …) use the default stdio transport; hosted clients (claude.ai custom connectors, ChatGPT, …) can only reach a URL, so run `anchor_mcp.py --http` and give them one — see [claude.ai / hosted clients](#claudeai--hosted-clients-http-transport-v116) below. Per-turn mechanics need the proxy or your own adapter.
 - **Built to be modded**: all continuity state is plain markdown with stable formats (`anchor_pinned.py`), every pipeline step is a replaceable function, and `build_turn()` is importable into your own server. Full guide + integration seams: [docs/cross-window.md](docs/cross-window.md).
 
 ### Search Debug Mode (v1.6+)
@@ -250,6 +250,28 @@ Restart Claude Code. Your AI now has these tools:
 ### LobeHub / SillyTavern / other MCP hosts
 
 Same JSON config under whichever MCP block the host exposes. SillyTavern needs the MCP Bridge plugin.
+
+### claude.ai / hosted clients (HTTP transport, v1.16+)
+
+The config above spawns `anchor_mcp.py` as a local subprocess (stdio). Hosted clients — claude.ai's **custom connectors**, ChatGPT, anything running on someone else's servers — cannot do that; the only thing they can reach is a URL. So run the same server over HTTP:
+
+```bash
+pip install fastapi uvicorn          # same extras as anchor_proxy
+python3 anchor_mcp.py --http --port 3333 --db-path /absolute/path/to/my_memory --token SOME_SECRET
+```
+
+Same tools, same data as stdio — only the pipe differs. It serves:
+
+- **Streamable HTTP** (current MCP spec) at `http://127.0.0.1:3333/mcp` — this is what claude.ai connectors speak.
+- **Legacy HTTP+SSE** at `/sse` (+ `/messages`) for hosts that still only speak the 2024-11-05 transport.
+- `--token` (or env `ANCHOR_HTTP_TOKEN`) requires `Authorization: Bearer …`. Optional: behind a random tunnel URL the URL itself is the secret; on a plain public host, set it.
+
+Then give it a public URL. Two ways, and the choice is really one question — *does your machine stay on?*
+
+1. **Your machine + a tunnel** (data stays with you). Zero-install: `ssh -R 80:localhost:3333 nokey@localhost.run` prints an `https://….lhr.life` address (verified end to end with this server). Or `cloudflared tunnel --protocol http2 --url http://127.0.0.1:3333`, or ngrok. Add `https://…/mcp` in claude.ai → Settings → Connectors → *Add custom connector*. Free tunnels get a new random address every start; a named tunnel (Cloudflare with your own domain, ngrok with an account) keeps one.
+2. **A small host** (Railway, Fly, a VPS — machine can be off): run with `--host 0.0.0.0 --port $PORT`, put `--db-path` on a persistent volume, set `ANCHOR_HTTP_TOKEN`, and add the host's `https://…/mcp`.
+
+Whichever you pick, `smoke_http.py` exercises both transports against a throwaway db, so you can check the server before you hand the URL to anyone.
 
 ### Use alongside other memory systems
 
@@ -480,7 +502,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.15](docs/release-notes/v1.15.md).
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.16](docs/release-notes/v1.16.md).
 
 ## Origin
 
