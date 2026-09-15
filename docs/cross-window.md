@@ -31,9 +31,11 @@ Point your frontend (Open WebUI, SillyTavern, LobeHub, anything that speaks the 
 
 The AI itself can set this up: it asks its human which provider/model to use for memory work, then writes the config.
 
-## Path B: MCP only (works everywhere, including web clients)
+## Path B: MCP only (any MCP host — local over stdio, hosted over HTTP)
 
-Real constraint, stated honestly: on claude.ai or any hosted web client, nothing can sit in the request path, so per-turn mechanical injection and the crash-proof tail are **not technically possible** there. What still works over plain MCP:
+> **Correction (v1.16, 2026-09-14).** Until v1.16 this section said plain MCP "works everywhere, including web clients". That was wrong: the server only spoke stdio, which hosted clients (claude.ai custom connectors, ChatGPT) cannot reach — they need a URL. v1.16 adds `anchor_mcp.py --http` (Streamable HTTP at `/mcp`, legacy SSE at `/sse`); see the README section *claude.ai / hosted clients*. Local hosts (Claude Code, Claude Desktop, LobeHub, SillyTavern) keep using stdio.
+
+Real constraint, stated honestly: on claude.ai or any hosted client, nothing can sit in the request path, so per-turn mechanical injection and the crash-proof tail are **not technically possible** there. What still works over MCP (stdio or HTTP):
 
 | Bridge | Web/MCP-only status |
 |---|---|
