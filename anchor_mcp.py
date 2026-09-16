@@ -722,7 +722,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.16.0"
+SERVER_VERSION = "1.16.1"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).
@@ -856,8 +856,10 @@ def run_http(db_path: str, pinned_dir: str = None, host: str = "127.0.0.1",
 
     @app.get("/")
     async def root():
+        # A customised path is a secret (v1.16.1) — never echo it on the public root page.
         return {"name": "anchor-memory", "version": SERVER_VERSION,
-                "mcp": path, "legacy_sse": "/sse", "auth": "bearer" if token else "none"}
+                "mcp": path if path == "/mcp" else "(custom path — not advertised)",
+                "legacy_sse": "/sse", "auth": "bearer" if token else ("path" if path != "/mcp" else "none")}
 
     # ── Streamable HTTP ──────────────────────────────────────────────────
     @app.post(path)
@@ -942,7 +944,7 @@ def run_http(db_path: str, pinned_dir: str = None, host: str = "127.0.0.1",
 
     import uvicorn
     print(f"[anchor_mcp] HTTP transport on http://{host}:{port}{path}  "
-          f"(legacy SSE: /sse)  auth={'bearer' if token else 'none'}  db={db_path}")
+          f"(legacy SSE: /sse)  auth={'bearer' if token else ('secret path' if path != '/mcp' else 'none')}  db={db_path}")
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
@@ -1007,7 +1009,16 @@ if __name__ == "__main__":
     parser.add_argument("--token", default=os.getenv("ANCHOR_HTTP_TOKEN") or None,
                         help="--http bearer token (or env ANCHOR_HTTP_TOKEN). Optional; without it "
                              "the URL itself is the secret.")
+    # v1.16.1: some hosted clients (grok.com custom connectors, claude.ai personal plans) let you
+    # enter a URL but no Authorization header. On a *fixed* tunnel domain the URL is then not a
+    # secret at all — so let the MCP path itself carry one: --path /mcp-<random>. The root page
+    # stops advertising the path when it is customised.
+    parser.add_argument("--path", default=os.getenv("ANCHOR_HTTP_PATH") or "/mcp",
+                        help="--http Streamable-HTTP endpoint path (default /mcp). Use a random one, e.g. "
+                             "/mcp-k3v9…, when the client cannot send a bearer token: the URL becomes the secret.")
     args = parser.parse_args()
+    if args.http and (not args.path.startswith("/") or len(args.path) < 2 or " " in args.path):
+        sys.exit("--path must start with '/' and contain no spaces, e.g. /mcp-a1b2c3")
 
     os.makedirs(args.db_path, exist_ok=True)
     pinned = args.pinned_dir or os.path.join(args.db_path, "pinned")
@@ -1026,6 +1037,6 @@ if __name__ == "__main__":
 
     if args.http:
         run_http(args.db_path, pinned_dir=args.pinned_dir, host=args.host,
-                 port=args.port, token=args.token)
+                 port=args.port, token=args.token, path=args.path)
     else:
         run_stdio(args.db_path, pinned_dir=args.pinned_dir)

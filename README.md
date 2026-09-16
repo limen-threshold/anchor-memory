@@ -253,7 +253,7 @@ Same JSON config under whichever MCP block the host exposes. SillyTavern needs t
 
 ### claude.ai / hosted clients (HTTP transport, v1.16+)
 
-The config above spawns `anchor_mcp.py` as a local subprocess (stdio). Hosted clients — claude.ai's **custom connectors**, ChatGPT, anything running on someone else's servers — cannot do that; the only thing they can reach is a URL. So run the same server over HTTP:
+The config above spawns `anchor_mcp.py` as a local subprocess (stdio). Hosted clients — claude.ai's **custom connectors**, grok.com's **Connectors → Custom**, ChatGPT, anything running on someone else's servers — cannot do that; the only thing they can reach is a URL. So run the same server over HTTP:
 
 ```bash
 pip install fastapi uvicorn          # same extras as anchor_proxy
@@ -265,6 +265,7 @@ Same tools, same data as stdio — only the pipe differs. It serves:
 - **Streamable HTTP** (current MCP spec) at `http://127.0.0.1:3333/mcp` — this is what claude.ai connectors speak.
 - **Legacy HTTP+SSE** at `/sse` (+ `/messages`) for hosts that still only speak the 2024-11-05 transport.
 - `--token` (or env `ANCHOR_HTTP_TOKEN`) requires `Authorization: Bearer …`. Optional: behind a random tunnel URL the URL itself is the secret; on a plain public host, set it.
+- `--path /mcp-<random>` (v1.16.1, or env `ANCHOR_HTTP_PATH`) moves the endpoint to a secret path. Use it when the client can enter a URL but **no** Authorization header (grok.com custom connectors in some accounts, claude.ai personal plans) *and* your tunnel domain is fixed — a permanent domain plus `/mcp` is guessable. The root page stops advertising the path once it is customised. Generate one with `python3 -c "import secrets;print('/mcp-'+secrets.token_urlsafe(18))"`.
 
 Then give it a public URL. Two ways, and the choice is really one question — *does your machine stay on?*
 
