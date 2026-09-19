@@ -36,6 +36,10 @@ Run periodically (like sleep for the brain):
 - **Auto-discovery**: Randomly samples memories and connects semantically similar but unlinked ones.
 - **Emotion equilibration**: Connected memories nudge each other's emotion scores toward equilibrium.
 
+**The dream pass never rewrites what a memory says (v1.18).** Through v1.17 it also asked an LLM to split "bundled" memories on every run and deleted the originals; that is now opt-in and non-lossy — `dream_pass(split=True)`, see `split_bundled()` — and `dream_extras.run_global_dedup` folds duplicates together without replacing the survivor's wording. If you ran either with an LLM configured, read [v1.18 release notes](docs/release-notes/v1.18.0.md).
+
+**Nothing is deleted without a copy (v1.18).** Every row removed by `delete`, a merge, a split, or short-tier decay is first appended verbatim to `deleted_memories.jsonl` next to `memories.db`. If that write fails, the delete doesn't happen. Recall never reads the file; it exists so that forgetting is recoverable.
+
 ### Emotion Scoring
 - Each memory carries an `emotion_score` from 0.0 (neutral) to 1.0 (intense).
 - Emotion score boosts retrieval priority — emotionally heavy memories surface more easily.
@@ -49,7 +53,7 @@ Run periodically (like sleep for the brain):
 ### Tiered Storage
 - `core` — permanent, never decays
 - `long` — kept indefinitely, but dream pass can upgrade/downgrade
-- `short` — decays after 14 days if not promoted
+- `short` — decays after 14 days if not promoted (archived to `deleted_memories.jsonl` first, v1.18)
 
 ### Manual Entanglement
 - Explicitly connect related memories with higher weight (2.0+).
@@ -63,7 +67,7 @@ Run periodically (like sleep for the brain):
 ### Dedup Merge (v1.10+)
 - When two memories point at the same thing, fold one into the other: `mem.merge_memories(survivor_id, duplicate_id)`.
 - The survivor inherits the duplicate's edges (colliding weights saturate-add, self-loops dropped), `usage_count` sums, `timestamp` takes the earlier, `pinned` OR's, `emotion_score` takes the max; the duplicate is deleted from both stores.
-- The caller decides who survives (usually the earlier memory, but quality can override). Logged as a `merged` event.
+- The caller decides who survives (usually the earlier memory, but quality can override). Logged as a `merged` event. The survivor's text is never rewritten; the duplicate is archived before removal (v1.18).
 
 ### Cross-Window Continuity (v1.12+)
 - **`anchor_proxy.py`** — an OpenAI-compatible proxy that sits between your frontend (Open WebUI, SillyTavern, LobeHub, …) and any OpenAI-compatible upstream, and makes continuity **machine-side**: every turn it injects the pinned layer (identity + session_state + recent_timeline), current time + interval, and per-turn memory recall; after every response it rewrites the previous-window tail (`last_session.md`) — so continuity survives crashes and closed tabs, and never depends on the model remembering to call a tool.
@@ -196,7 +200,7 @@ results = mem.search("ocean waves")
 # Run dream pass (do this daily)
 stats = mem.dream_pass()
 print(stats)
-# {'decayed_memories': 3, 'pruned_edges': 12, 'decayed_strong': 5, 'auto_discovered': 8, 'emotion_equalized': 15}
+# {'decayed_memories': 3, 'pruned_edges': 12, 'decayed_strong': 5, 'auto_discovered': 8, 'emotion_equalized': 15, 'split_memories': 0}
 ```
 
 ## Requirements
@@ -507,7 +511,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.16](docs/release-notes/v1.16.md).
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.18.0](docs/release-notes/v1.18.0.md) — **consolidation no longer rewrites memories; upgrade if you run `dream_pass` with an LLM.**
 
 ## Origin
 

@@ -225,7 +225,7 @@ class AnchorMemory:
               tier: str = "short", connect_to: list = None,
               emotion_score: float = 0.5,
               source: str = None, entity: str = None,
-              context: str = "") -> str:
+              context: str = "", timestamp: str = None) -> str:
         """Store a memory with optional connections and emotion scoring.
 
         Args:
@@ -246,6 +246,11 @@ class AnchorMemory:
                     with include_context=True on search. The DB column existed
                     since the context migration but store() never exposed it —
                     only the summary layer was reachable through the public API.
+            timestamp: Optional ISO time of the ORIGINAL event, for rows that are
+                    new to the store but not new in the world (split pieces inherit
+                    their parent's time; imports keep their source time). Default:
+                    now. Ignored when re-storing an existing id — an edit never
+                    moves a memory in time.
 
         Returns:
             The memory_id.
@@ -271,9 +276,12 @@ class AnchorMemory:
             print(f"[AnchorMemory] near-dup merge: '{text[:40]}' → survivor {survivor}; new not stored.")
             return survivor
 
+        _existing = self.db.get(memory_id)
         meta = {
             "memory_id": memory_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            # vector-store metadata feeds recency scoring: keep it equal to the row's
+            # real time (existing row → unchanged; new row → caller's or now).
+            "timestamp": (_existing or {}).get("timestamp") or timestamp or datetime.utcnow().isoformat(),
             "tag": tag,
         }
         if source:
@@ -311,7 +319,7 @@ class AnchorMemory:
                 pass
 
         self.db.insert(memory_id, text, tag=tag, tier=tier, emotion_score=emotion_score,
-                       context=context or "")
+                       context=context or "", timestamp=timestamp)
 
         # Create explicit connections
         if connect_to:
@@ -772,14 +780,29 @@ class AnchorMemory:
             "new_connections": new_connections,
         }
 
-    def delete(self, memory_id: str) -> bool:
-        """Delete a memory and its edges."""
+    def delete(self, memory_id: str, reason: str = "deleted") -> bool:
+        """Delete a memory and its edges.
+
+        v1.18: the full row is archived to deleted_memories.jsonl first; if that
+        write fails nothing is deleted. Order is archive → vector → row, so a
+        failure can only leave a row behind (retryable), never an orphan vector."""
         try:
+            if memory_id not in self.db.archive_rows([memory_id], reason):
+                return False
             self._collection.delete(ids=[memory_id])
-            self.db.delete(memory_id)
-            return True
+            return bool(self.db.delete(memory_id, reason, archived=True))
         except Exception:
             return False
+
+    def decay_short(self, days: int = 14) -> int:
+        """Forget short-tier memories older than `days` — from BOTH stores, archived first.
+        (db.decay_short alone removed the SQLite rows and left their vectors behind.)"""
+        ids = self.db.archive_rows(self.db.short_expired_ids(days), reason=f"decay_short>{days}d")
+        if not ids:
+            return 0
+        for i in range(0, len(ids), 400):
+            self._collection.delete(ids=ids[i:i + 400])
+        return self.db.decay_short(days, ids=ids, archived=True)
 
     def merge_memories(self, survivor_id: str, duplicate_id: str) -> dict:
         """Fold `duplicate_id` into `survivor_id`, then delete the duplicate
@@ -867,7 +890,8 @@ class AnchorMemory:
                    edge_decay_factor: float = 0.9,
                    strong_edge_decay_factor: float = 0.95,
                    emotion_nudge: float = 0.05,
-                   auto_discover: bool = True) -> dict:
+                   auto_discover: bool = True,
+                   split: bool = False, llm=None) -> dict:
         """Run memory consolidation — like sleep for the brain.
 
         - Decay short-tier memories older than N days
@@ -876,13 +900,22 @@ class AnchorMemory:
         - Auto-discover semantically close but unconnected memories
         - Equilibrate emotion scores across connected memories
 
+        The dream pass never rewrites what a memory says. Forgetting (short-tier
+        decay) archives each row to deleted_memories.jsonl first.
+
+        split: OFF by default (v1.18). Until v1.17 every pass also asked an LLM to
+            split "bundled" memories and deleted the originals — see
+            split_bundled() for what that cost. Pass split=True to opt in to the
+            non-destructive version.
+        llm: optional anchor_llm LLM used only when split=True.
+
         Returns:
             Dict with counts of actions taken.
         """
         results = {}
 
         # 1. Decay short-tier memories
-        results["decayed_memories"] = self.db.decay_short(days=short_decay_days)
+        results["decayed_memories"] = self.decay_short(days=short_decay_days)
         if results["decayed_memories"]:
             self.reload()
 
@@ -919,51 +952,72 @@ class AnchorMemory:
             nudge=emotion_nudge, threshold=0.2
         )
 
-        # 6. Split bundled memories (if LLM available)
-        try:
-            split_count = self.split_bundled(batch_size=50, dry_run=False)
-            results["split_memories"] = split_count
-        except Exception:
-            results["split_memories"] = 0
+        # 6. Split bundled memories — opt-in only (v1.18)
+        results["split_memories"] = 0
+        if split:
+            try:
+                results["split_memories"] = self.split_bundled(batch_size=50, dry_run=False, llm=llm)
+            except Exception:
+                results["split_memories"] = 0
 
         return results
 
     def split_bundled(self, batch_size: int = 50, dry_run: bool = False,
-                      model: str = "claude-haiku-4-5-20251001") -> int:
-        """Find and split memories that bundle multiple unrelated topics.
+                      model: str = "claude-haiku-4-5-20251001", llm=None,
+                      max_chars: int = 4000) -> int:
+        """Find memories that bundle several unrelated topics and split them.
 
-        A memory should be about ONE independently searchable thing.
-        This method uses an LLM to identify bundled memories and split them.
+        OPT-IN (dream_pass(split=True) or a direct call). What v1.18 changed, and why:
+        through v1.17 this ran on every dream pass, showed the model only the first
+        400 characters of each memory, stored the pieces with TODAY's timestamp and
+        then deleted the original. On a store that ran it nightly for two months,
+        58% of all rows ended up as re-dated fragments: old events surfaced as
+        "a few days ago", recency boost and same-day caps treated them as new, and
+        everything past character 400 of a split memory was gone. So now:
+
+          - the model sees the WHOLE memory; anything longer than `max_chars` is
+            never split (a bundle that big belongs in `context`, not in pieces);
+          - each piece inherits the parent's timestamp, tier, source and entity,
+            and carries the parent's full original text in its `context`;
+          - the parent is archived to deleted_memories.jsonl before it is removed,
+            and its edges move to the first piece;
+          - a piece that the near-dup gate folds into an existing memory counts as
+            stored (the fact survives there); if no piece could be stored the
+            parent stays.
 
         Args:
-            batch_size: Process memories in batches of this size.
-            dry_run: If True, only identify but don't execute splits.
-            model: LLM model to use for analysis.
+            batch_size: memories per LLM call.
+            dry_run: identify only, change nothing.
+            model: legacy Anthropic model name (used only when ANTHROPIC_API_KEY is
+                set and `llm` is None).
+            llm: an anchor_llm LLM instance (takes precedence).
+            max_chars: memories longer than this are left alone.
 
         Returns:
-            Number of memories split.
+            Number of memories split (or that would be, when dry_run).
         """
-        # v1.9: use anchor_llm. The model= kwarg is honored for backward compat
-        # when ANTHROPIC_API_KEY is set, otherwise fall back to configured default.
-        try:
-            from anchor_llm import get_default_llm, AnthropicLLM, ConfigError
-        except ImportError:
-            return 0
-        try:
-            if model and os.getenv("ANTHROPIC_API_KEY"):
-                llm_inst = AnthropicLLM(model=model)
-            else:
-                llm_inst = get_default_llm()
-        except ConfigError:
-            return 0
+        llm_inst = llm
+        if llm_inst is None:
+            try:
+                from anchor_llm import get_default_llm, AnthropicLLM, ConfigError
+            except ImportError:
+                return 0
+            try:
+                if model and os.getenv("ANTHROPIC_API_KEY"):
+                    llm_inst = AnthropicLLM(model=model)
+                else:
+                    llm_inst = get_default_llm()
+            except ConfigError:
+                return 0
 
         system = (
             "You review memories for bundling. A memory should be about ONE topic.\n"
             "If a memory lists multiple unrelated things (e.g. 'built X, wrote Y, fixed Z'),\n"
-            "output a JSON array of split items. Each: {\"id\": \"...\", \"into\": [{\"text\": \"...\", \"tag\": \"...\", \"tier\": \"long\"}]}\n"
-            "TIMESTAMPS ARE MANDATORY in each split piece.\n"
+            "output a JSON array of split items. Each: {\"id\": \"...\", \"into\": [{\"text\": \"...\", \"tag\": \"...\"}]}\n"
+            "Each piece must keep the ORIGINAL wording and language of the part it covers — copy, do not\n"
+            "paraphrase, summarise or translate — and must keep every date that appears in that part.\n"
             "Same event on different days = different memories.\n"
-            "If a memory is fine as-is, skip it (don't include in output).\n"
+            "If a memory is fine as-is, skip it (don't include in output). When unsure, do not split.\n"
             "Output [] if nothing to split. Valid JSON only, no markdown fences."
         )
 
@@ -975,15 +1029,21 @@ class AnchorMemory:
             batch = self.db.list_all(limit=batch_size, offset=offset)
             if not batch:
                 break
+            offset += batch_size
 
+            rows = {}
             mem_lines = []
             for m in batch:
-                snippet = m["text"][:400] if "text" in m else m.get("snippet", "")[:400]
-                mem_lines.append(f"[{m['memory_id']}] tag={m.get('tag','')} time={m.get('timestamp','')}\n{snippet}")
+                row = self.db.get(m["memory_id"]) or {}
+                text = row.get("text") or ""
+                if not text or len(text) > max_chars or row.get("pinned"):
+                    continue
+                rows[m["memory_id"]] = row
+                mem_lines.append(f"[{m['memory_id']}] tag={row.get('tag','')} time={row.get('timestamp','')}\n{text}")
+            if not mem_lines:
+                continue
 
             try:
-                # 1h TTL: split_bundled walks the entire memory store; cache
-                # the split-rules system prompt across the whole pass.
                 response = llm_inst.call(
                     system=system,
                     user="\n---\n".join(mem_lines),
@@ -993,26 +1053,50 @@ class AnchorMemory:
                 raw = response.text.strip()
                 if raw.startswith("```"):
                     raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
                 actions = json.loads(raw)
-                for item in actions:
-                    mid = item.get("id", "")
-                    into = item.get("into", [])
-                    if mid and len(into) >= 2 and not dry_run:
-                        for sub in into:
-                            sub_text = sub.get("text", "")
-                            sub_tag = sub.get("tag", "general")
-                            sub_tier = sub.get("tier", "long")
-                            if sub_text:
-                                sub_id = f"split_{uuid.uuid4().hex[:8]}"
-                                self.store(sub_id, sub_text, tag=sub_tag, tier=sub_tier)
-                        self.delete(mid)
-                        total_split += 1
-            except (json.JSONDecodeError, Exception):
-                pass
+            except Exception:
+                continue
 
-            offset += batch_size
+            for item in actions if isinstance(actions, list) else []:
+                mid = item.get("id", "")
+                into = [x for x in (item.get("into") or []) if (x.get("text") or "").strip()]
+                parent = rows.get(mid)
+                if not parent or len(into) < 2:
+                    continue
+                if dry_run:
+                    total_split += 1
+                    continue
+                try:
+                    meta = (self._collection.get(ids=[mid], include=["metadatas"]).get("metadatas") or [{}])[0] or {}
+                except Exception:
+                    meta = {}
+                original = parent.get("text") or ""
+                if parent.get("context"):
+                    original += "\n\n[context]\n" + parent["context"]
+                landed = []
+                for sub in into:
+                    sub_id = f"split_{uuid.uuid4().hex[:8]}"
+                    try:
+                        got = self.store(
+                            sub_id, sub["text"], tag=sub.get("tag") or parent.get("tag") or "general",
+                            tier=parent.get("tier") or "long",
+                            emotion_score=parent.get("emotion_score") if parent.get("emotion_score") is not None else 0.5,
+                            source=meta.get("source"), entity=meta.get("entity") or parent.get("entity"),
+                            context=f"[split from {mid}, original text follows]\n{original}",
+                            timestamp=parent.get("timestamp"),
+                        )
+                        landed.append(got)
+                    except Exception as e:
+                        print(f"[AnchorMemory] split piece failed for {mid}: {e}")
+                if not landed:
+                    continue  # nothing stored → the parent stays
+                try:
+                    self.db.migrate_edges(mid, landed[0])
+                except Exception:
+                    pass
+                if self.delete(mid, reason=f"split into {','.join(landed)}"):
+                    total_split += 1
 
-        if total_split:
+        if total_split and not dry_run:
             self.reload()
         return total_split

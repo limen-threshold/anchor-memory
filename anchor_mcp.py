@@ -218,7 +218,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
         },
         {
             "name": "dream_pass",
-            "description": "Run memory consolidation — like sleep for the brain. Decays old memories, prunes weak connections, discovers new ones, equilibrates emotion scores. Run daily.",
+            "description": "Run memory consolidation — like sleep for the brain. Forgets expired short-tier memories (each is archived to deleted_memories.jsonl first), prunes weak connections, discovers new ones, equilibrates emotion scores. It never rewrites, splits or merges what a memory says. Run daily.",
             "inputSchema": {
                 "type": "object",
                 "properties": {}
@@ -765,7 +765,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.17.0"
+SERVER_VERSION = "1.18.0"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).

@@ -149,8 +149,23 @@ def run_global_dedup(mem, threshold: float = 0.92, max_pairs: int = 100,
                       batch: int = 10, dry_run: bool = False,
                       audit_dir: str = "./anchor_audit",
                       model: Optional[str] = None,
-                      llm: Optional["LLM"] = None) -> dict:
+                      llm: Optional["LLM"] = None,
+                      rewrite: bool = False) -> dict:
     """Cross-batch global dedup. Returns counts dict.
+
+    v1.18 — a merge no longer rewrites anything. The survivor keeps its own
+    words, tag, tier and context; the duplicate is folded in with
+    mem.merge_memories() (edges migrate, usage sums, earlier timestamp wins) and
+    archived to deleted_memories.jsonl before it is removed. Through v1.17 the
+    survivor was re-stored with the LLM's `merged_text` and default arguments,
+    which (a) replaced first-hand wording with a model paraphrase, (b) reset the
+    survivor to tier='short' — so the next decay pass deleted it — and (c) wiped
+    its `context`. Pass rewrite=True only if you really want the merged text; even
+    then tag/tier are kept and the previous wording is preserved in `context`.
+
+    Tip: run with dry_run=True first and read the audit log. "Duplicate" is the
+    judge's opinion; two memories at 0.96 similarity often differ in the one
+    detail (a date, a quote) that matters.
 
     Args:
         llm: Optional LLM instance. If None, resolved via anchor_llm.get_default_llm().
@@ -199,9 +214,20 @@ def run_global_dedup(mem, threshold: float = 0.92, max_pairs: int = 100,
                     merged += 1
                     continue
                 try:
-                    mem.store(keep_id, merged_text)
-                    if remove_id != keep_id and hasattr(mem, "delete"):
-                        mem.delete(remove_id)
+                    if remove_id == keep_id:
+                        skipped += 1
+                        continue
+                    if rewrite:
+                        _old = mem.db.get(keep_id) or {}
+                        _ctx = _old.get("context") or ""
+                        if (_old.get("text") or "") and (_old.get("text") or "") not in _ctx:
+                            _ctx = (f"[wording before dedup rewrite]\n{_old['text']}"
+                                    + (f"\n\n{_ctx}" if _ctx else ""))
+                        mem.store(keep_id, merged_text, tag=_old.get("tag"),
+                                  tier=_old.get("tier") or "long",
+                                  emotion_score=_old.get("emotion_score") if _old.get("emotion_score") is not None else 0.5,
+                                  context=_ctx)
+                    mem.merge_memories(keep_id, remove_id)
                     merged += 1
                 except Exception as e:
                     print(f"[dream_extras]   merge error {keep_id}/{remove_id}: {e}")

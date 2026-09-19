@@ -2,6 +2,7 @@
 
 Most recent first. Each note follows the same shape: what changed, why it matters, what to do about it.
 
+- [v1.18.0](v1.18.0.md) — 2026-09-19 · **consolidation stops rewriting memories** (dream-pass split off by default and non-lossy; dedup no longer rewrites/demotes the survivor; archive-before-delete; two-store decay) — upgrade if you run `dream_pass` with an LLM
 - [v1.10](v1.10.md) — 2026-06-17 · UPSERT insert + self-loop guard (bug fixes) · recency boost · dedup merge
 - [v1.9.1](v1.9.1.md) — 2026-05-24
 - [v1.9](v1.9.md) — 2026-05-23 · multi-provider LLM abstraction (BYO LLM)

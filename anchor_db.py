@@ -229,7 +229,7 @@ class AnchorDB:
 
     def insert(self, memory_id: str, text: str, tag: str = "general",
                tier: str = "short", emotion_score: float = 0.5,
-               context: str = ""):
+               context: str = "", timestamp: str = None):
         """Insert a memory; re-inserting an existing id UPDATES it in place.
 
         First write = INSERT. Re-store of an existing id = UPSERT that updates
@@ -248,7 +248,10 @@ class AnchorDB:
                            must not reset it.
         """
         self._ensure_context_column()
-        now = datetime.utcnow().isoformat()
+        # v1.18: `timestamp` lets a caller carry an ORIGINAL event time onto a new row
+        # (split pieces inherit their parent's time; imports keep their source time).
+        # Only honoured on the first write — the UPSERT below never moves an existing one.
+        now = timestamp or datetime.utcnow().isoformat()
         with self._conn() as conn:
             conn.execute(
                 """
@@ -274,8 +277,44 @@ class AnchorDB:
             ).fetchone()
         return dict(row) if row else None
 
-    def delete(self, memory_id: str):
-        self.log_event(memory_id, "deleted")
+    # ── v1.18: nothing leaves the store without a verbatim copy ──
+    # Every row about to be deleted (explicit delete, merge, split, short-tier
+    # decay) is first appended to `deleted_memories.jsonl` next to the database.
+    # If the archive write fails, the delete does not happen. Forgetting still
+    # works exactly as before; it is just recoverable now.
+    def archive_path(self) -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "deleted_memories.jsonl")
+
+    def archive_rows(self, memory_ids: list, reason: str = "deleted") -> list:
+        """Append the full rows for `memory_ids` to the delete archive.
+        Returns the ids that are SAFE to delete: archived, or not present at all."""
+        import json
+        safe, lines = [], []
+        with self._conn() as conn:
+            for mid in memory_ids:
+                row = conn.execute("SELECT * FROM memories WHERE memory_id = ?", (mid,)).fetchone()
+                if row is None:
+                    safe.append(mid)
+                    continue
+                lines.append((mid, json.dumps(
+                    {"deleted_at": datetime.utcnow().isoformat(), "reason": reason, "row": dict(row)},
+                    ensure_ascii=False, default=str)))
+        if lines:
+            try:
+                with open(self.archive_path(), "a", encoding="utf-8") as f:
+                    for _mid, line in lines:
+                        f.write(line + "\n")
+                safe.extend(mid for mid, _ in lines)
+            except Exception as e:
+                print(f"[AnchorDB] delete archive write failed ({e}) — {len(lines)} rows NOT deleted")
+        return safe
+
+    def delete(self, memory_id: str, reason: str = "deleted", archived: bool = False) -> bool:
+        """archived=True: the caller already archived this row (AnchorMemory.delete does,
+        so the copy exists before the vector is touched)."""
+        if not archived and memory_id not in self.archive_rows([memory_id], reason):
+            return False
+        self.log_event(memory_id, "deleted", reason)
         with self._conn() as conn:
             # Application-level cascade: some SQLite builds (notably Windows
             # default) silently fail to enforce PRAGMA foreign_keys = ON, leaving
@@ -289,6 +328,7 @@ class AnchorDB:
             )
             conn.execute("DELETE FROM memories WHERE memory_id = ?", (memory_id,))
             conn.commit()
+        return True
 
     def list_all(self, limit: int = 50, offset: int = 0) -> list:
         with self._conn() as conn:
@@ -413,16 +453,42 @@ class AnchorDB:
             conn.execute("UPDATE memories SET tier = ? WHERE memory_id = ?", (tier, memory_id))
             conn.commit()
 
-    def decay_short(self, days: int = 14) -> int:
-        """Delete short-tier memories older than N days."""
+    def short_expired_ids(self, days: int = 14) -> list:
+        """Ids of short-tier memories older than N days (read-only)."""
         cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
         with self._conn() as conn:
-            cursor = conn.execute(
-                "DELETE FROM memories WHERE tier = 'short' AND timestamp < ?",
+            rows = conn.execute(
+                "SELECT memory_id FROM memories WHERE tier = 'short' AND timestamp < ?",
                 (cutoff,)
-            )
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def decay_short(self, days: int = 14, ids: list = None, archived: bool = False) -> int:
+        """Delete short-tier memories older than N days (SQLite side).
+
+        v1.18: each row is archived to deleted_memories.jsonl first and gets a
+        'decayed' event; rows whose archive write failed are left for the next
+        pass. Prefer AnchorMemory.decay_short(), which also removes the vectors —
+        calling this directly leaves them behind in the vector store."""
+        ids = self.short_expired_ids(days) if ids is None else list(ids)
+        if not archived:
+            ids = self.archive_rows(ids, reason=f"decay_short>{days}d")
+        if not ids:
+            return 0
+        n = 0
+        with self._conn() as conn:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                q = ",".join("?" * len(chunk))
+                conn.execute(f"DELETE FROM edges WHERE source_id IN ({q}) OR target_id IN ({q})", chunk + chunk)
+                n += conn.execute(f"DELETE FROM memories WHERE memory_id IN ({q})", chunk).rowcount
             conn.commit()
-        return cursor.rowcount
+        for mid in ids:
+            try:
+                self.log_event(mid, "decayed", f"short-tier >{days}d")
+            except Exception:
+                pass
+        return n
 
     # ── Citation tracking ──
 
