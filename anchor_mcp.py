@@ -378,6 +378,33 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
             }
         },
         {
+            "name": "list_identity_files",
+            "description": "List the identity files in your pinned directory — the always-loaded layer that wakeup() returns verbatim every window (self-descriptions such as identity.md / 我是谁.md, plus session_state.md and recent_timeline.md which Anchor maintains). Shows size, last modified, and whether an _order.txt manifest would load each one.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "read_identity_file",
+            "description": "Read one pinned file in full by name (e.g. 'identity.md'). Use before editing so an overwrite starts from the real current text.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "Filename inside the pinned dir, e.g. identity.md"}},
+                "required": ["name"]
+            }
+        },
+        {
+            "name": "write_identity_file",
+            "description": "Create, overwrite, or append to an identity file in your pinned directory — for clients with no file access (claude.ai, grok.com). Identity files are whole first-person self-descriptions that wakeup() returns verbatim every window, unranked — unlike memories, which are fragments that must win a search (or be pinned). Write 'who I am', not 'who the user is'; one thing per line, dated, in first person. Safe like write_session_state: an overwrite archives the previous version to identity_archive/ first; append never loses anything. Plain .md filenames only; session_state.md has its own tool.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Filename, e.g. identity.md or 我是谁.md (must end with .md, no paths)"},
+                    "content": {"type": "string", "description": "The text to write (full file for overwrite; the new lines for append)"},
+                    "mode": {"type": "string", "enum": ["overwrite", "append"], "default": "overwrite"}
+                },
+                "required": ["name", "content"]
+            }
+        },
+        {
             "name": "write_session_state",
             "description": "Write your session_state.md — your own rolling state that carries across windows (what's ongoing, decisions made, current threads, mood). This is the ONLY correct way to update it: the current version is archived automatically before the new one is written, and a continuity header is added so future windows read it as their own state, not a message from someone else. Write the COMPLETE current state (not a diff), in first person. Update it when things change materially and when a conversation wraps up.",
             "inputSchema": {
@@ -677,6 +704,22 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                     out["archived_previous"] = archived
                 return out
 
+            # v1.17: identity files over MCP (hosted clients have no file access)
+            elif name == "list_identity_files":
+                return {"pinned_dir": pinned_dir, "files": anchor_pinned.list_identity_files(pinned_dir)}
+
+            elif name == "read_identity_file":
+                fname = anchor_pinned._check_identity_name(args["name"]) if args.get("name") not in (
+                    anchor_pinned.SESSION_STATE, anchor_pinned.RECENT_TIMELINE) else args["name"]
+                text = anchor_pinned.read_file(pinned_dir, fname)
+                if not text:
+                    return {"name": fname, "exists": False, "content": ""}
+                return {"name": fname, "exists": True, "chars": len(text), "content": text}
+
+            elif name == "write_identity_file":
+                return anchor_pinned.write_identity_file(pinned_dir, args["name"], args["content"],
+                                                         mode=args.get("mode", "overwrite"))
+
             elif name == "leave_comment":
                 cid = mem.db.insert_comment(
                     memory_id=args["memory_id"],
@@ -722,7 +765,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.16.1"
+SERVER_VERSION = "1.17.0"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).

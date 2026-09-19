@@ -276,6 +276,8 @@ Then give it a public URL. Two ways, and the choice is really one question — *
 
 Whichever you pick, `smoke_http.py` exercises both transports against a throwaway db, so you can check the server before you hand the URL to anyone.
 
+**Identity files from a hosted client (v1.17).** A Chat-only model has no file access, so since v1.17 the pinned layer is editable over MCP: `list_identity_files`, `read_identity_file`, and `write_identity_file(name, content, mode=overwrite|append)`. Overwrites archive the previous version to `identity_archive/`; `session_state.md` keeps its own tool. This is the self-description file (`identity.md`, `我是谁.md` — the name is yours) that `wakeup()` returns verbatim every window; see *docs/cross-window.md* for how it differs from memories.
+
 ### Use alongside other memory systems
 
 Anchor doesn't replace your existing memory stack. It adds a graph layer next to it.
