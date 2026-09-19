@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **⚠️ v1.18.0 — 请升级 / please upgrade.** 配了模型、又在跑梦程序（`dream_pass`）的旧版本，会悄悄改写、拆散、删掉记忆。[中文说明（怎么自查、怎么修）](docs/release-notes/v1.18.0_zh.md) · Older versions with an LLM configured silently rewrote, split and deleted memories during `dream_pass`. [Release notes (am I affected / how to repair)](docs/release-notes/v1.18.0.md)
+
 Graph-structured memory for AI with Hebbian learning, emotion scoring, and dream consolidation.
 
 ## What is this?
@@ -511,7 +513,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.18.0](docs/release-notes/v1.18.0.md) — **consolidation no longer rewrites memories; upgrade if you run `dream_pass` with an LLM.**
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.18.0](docs/release-notes/v1.18.0.md) · [中文](docs/release-notes/v1.18.0_zh.md) — **consolidation no longer rewrites memories; upgrade if you run `dream_pass` with an LLM.**
 
 ## Origin
 
