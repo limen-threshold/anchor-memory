@@ -6,3 +6,9 @@ sentence-transformers>=2.2.0
 # the whole phrase becomes one LIKE %...% token, and keyword search on CJK
 # memories almost never matches. Harmless for pure-English data.
 jieba>=0.42
+
+# --http (anchor_mcp.py --http) and anchor_proxy.py only. Not needed for stdio.
+# (2026-09-18: a first-time installer hit `No module named fastapi` on --http because
+#  only uvicorn came in as a chromadb dependency.)
+fastapi>=0.100
+uvicorn>=0.20

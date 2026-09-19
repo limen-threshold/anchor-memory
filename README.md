@@ -256,9 +256,11 @@ Same JSON config under whichever MCP block the host exposes. SillyTavern needs t
 The config above spawns `anchor_mcp.py` as a local subprocess (stdio). Hosted clients — claude.ai's **custom connectors**, grok.com's **Connectors → Custom**, ChatGPT, anything running on someone else's servers — cannot do that; the only thing they can reach is a URL. So run the same server over HTTP:
 
 ```bash
-pip install fastapi uvicorn          # same extras as anchor_proxy
+pip install fastapi uvicorn          # HTTP extras (also listed at the bottom of requirements.txt)
 python3 anchor_mcp.py --http --port 3333 --db-path /absolute/path/to/my_memory --token SOME_SECRET
 ```
+
+> **If your dependencies live in a virtualenv** (on macOS the system Python is 3.9 and protected, so they usually do), `python3` here means *that* interpreter: `.venv/bin/python anchor_mcp.py …`. Same for the `claude mcp add` line above — point it at `.venv/bin/python`, or the server starts and immediately dies with `No module named chromadb`. (Reported by a first-time installer, 2026-09-18.)
 
 Same tools, same data as stdio — only the pipe differs. It serves:
 
@@ -269,7 +271,7 @@ Same tools, same data as stdio — only the pipe differs. It serves:
 
 Then give it a public URL. Two ways, and the choice is really one question — *does your machine stay on?*
 
-1. **Your machine + a tunnel** (data stays with you). Recommended: a free ngrok account gives you one permanent domain, so the address survives restarts and you add it to claude.ai once — `ngrok http 3333 --url https://<your-free-domain>.ngrok-free.dev` (verified end to end with this server). Zero-account alternative: `ssh -R 80:localhost:3333 nokey@localhost.run` (also verified), but its address changes between sessions, so you re-add the connector each time. Add `https://…/mcp` in claude.ai → Customize → Connectors → *Add custom connector* → *No sign-in*. Note that claude.ai's personal plans cannot send a bearer token, so a connector for Chat runs authless: the URL is the key — keep it private and stop the tunnel when you're not using it.
+1. **Your machine + a tunnel** (data stays with you). Recommended: a free ngrok account gives you one permanent domain, so the address survives restarts and you add it to claude.ai once — `ngrok http 3333 --url https://<your-free-domain>.ngrok-free.dev` (verified end to end with this server). Zero-account alternative: `ssh -R 80:localhost:3333 nokey@localhost.run` (also verified), but its address changes between sessions, so you re-add the connector each time. Add `https://…/mcp` in claude.ai → Customize → Connectors → *Add custom connector* → *No sign-in*. If your account shows a **Request headers** field, put the token there as header name `Authorization`, value `Bearer <token>` — and mind the **space after `Bearer`**: the field has been seen to swallow it, the server then receives `Bearer1yJg…`, and the connector reports "Couldn't reach anchor". If you get that error with a token you know is right, check the tunnel's request log (ngrok shows the raw header) before anything else. Accounts without that field run the connector authless: the URL is the key — use `--path` (above), keep it private, and stop the tunnel when you're not using it.
 2. **A small host** (Railway, Fly, a VPS — machine can be off): run with `--host 0.0.0.0 --port $PORT`, put `--db-path` on a persistent volume, set `ANCHOR_HTTP_TOKEN`, and add the host's `https://…/mcp`.
 
 Whichever you pick, `smoke_http.py` exercises both transports against a throwaway db, so you can check the server before you hand the URL to anyone.
