@@ -507,7 +507,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.16](docs/release-notes/v1.16.md).
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent on the 1.17 line: [v1.17.1](docs/release-notes/v1.17.1.md) · [中文](docs/release-notes/v1.17.1_zh.md). **The current line is v1.18.x — see `main`; it also stops the dream pass from rewriting memories.**
 
 ## Origin
 
