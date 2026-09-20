@@ -4,6 +4,7 @@
 
 Most recent first. Each note follows the same shape: what changed, why it matters, what to do about it.
 
+- [v1.18.1 / v1.17.1](v1.17.1.md) · [中文](v1.17.1_zh.md) — 2026-09-19 · **identity files actually reach the window** (`wakeup()` and `--wakeup-text` return them; invitation pool no longer injected whole) — reported by 大管家. v1.17.1 = v1.17.0 + this fix only; v1.18.1 = current line
 - [v1.18.0](v1.18.0.md) · [中文](v1.18.0_zh.md) — 2026-09-19 · **consolidation stops rewriting memories** (dream-pass split off by default and non-lossy; dedup no longer rewrites/demotes the survivor; archive-before-delete; two-store decay) — upgrade if you run `dream_pass` with an LLM
 - [v1.17.0](v1.17.0.md) · [中文](v1.17.0_zh.md) — 2026-09-18 · identity files over MCP (hosted clients can keep their own self-description)
 - [v1.16.1](v1.16.1.md) · [中文](v1.16.1_zh.md) — 2026-09-16 · `--path` secret endpoint for clients that cannot send headers

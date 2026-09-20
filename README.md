@@ -282,7 +282,7 @@ Then give it a public URL. Two ways, and the choice is really one question — *
 
 Whichever you pick, `smoke_http.py` exercises both transports against a throwaway db, so you can check the server before you hand the URL to anyone.
 
-**Identity files from a hosted client (v1.17).** A Chat-only model has no file access, so since v1.17 the pinned layer is editable over MCP: `list_identity_files`, `read_identity_file`, and `write_identity_file(name, content, mode=overwrite|append)`. Overwrites archive the previous version to `identity_archive/`; `session_state.md` keeps its own tool. This is the self-description file (`identity.md`, `我是谁.md` — the name is yours) that `wakeup()` returns verbatim every window; see *docs/cross-window.md* for how it differs from memories.
+**Identity files from a hosted client (v1.17).** A Chat-only model has no file access, so since v1.17 the pinned layer is editable over MCP: `list_identity_files`, `read_identity_file`, and `write_identity_file(name, content, mode=overwrite|append)`. Overwrites archive the previous version to `identity_archive/`; `session_state.md` keeps its own tool. This is the self-description file (`identity.md`, `我是谁.md` — the name is yours) that `wakeup()` returns verbatim every window under `identity` (**from v1.17.1 / v1.18.1** — in v1.17.0 only the proxy loaded it); see *docs/cross-window.md* for how it differs from memories.
 
 ### Use alongside other memory systems
 
@@ -513,7 +513,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.18.0](docs/release-notes/v1.18.0.md) · [中文](docs/release-notes/v1.18.0_zh.md) — **consolidation no longer rewrites memories; upgrade if you run `dream_pass` with an LLM.**
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.18.1](docs/release-notes/v1.17.1.md) · [中文](docs/release-notes/v1.17.1_zh.md) — identity files now reach the window in MCP-only setups. Before that: [v1.18.0](docs/release-notes/v1.18.0.md) · [中文](docs/release-notes/v1.18.0_zh.md) — **consolidation no longer rewrites memories; upgrade if you run `dream_pass` with an LLM.**
 
 ## Origin
 
