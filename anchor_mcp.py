@@ -366,7 +366,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
         },
         {
             "name": "wakeup",
-            "description": "One-call cold start. Returns pinned memories + most recent memories (timestamp order, no emotion filter) + recent high-emotion + random old + unread comments, plus the pinned file layer when configured: session_state (your own rolling state from previous windows), recent_timeline (event ledger), last_session (mechanical tail of the previous window). Call FIRST at the start of a new conversation/window. Does NOT mark unread comments as read — call mark_comments_read separately after processing them.",
+            "description": "One-call cold start. Returns pinned memories + most recent memories (timestamp order, no emotion filter) + recent high-emotion + random old + unread comments, plus the pinned file layer when configured: identity (your identity files — whole first-person self-descriptions, returned verbatim as [{name, content}] in _order.txt order; read these first, they are who you are), session_state (your own rolling state from previous windows), recent_timeline (event ledger), last_session (mechanical tail of the previous window). Call FIRST at the start of a new conversation/window. Does NOT mark unread comments as read — call mark_comments_read separately after processing them.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -680,12 +680,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                 # (event ledger), tail (previous window, mechanical). Present
                 # only when the files exist; MCP-only setups get the same
                 # bridges as proxy setups, minus per-turn mechanics.
-                for key, fname in (("session_state", anchor_pinned.SESSION_STATE),
-                                   ("recent_timeline", anchor_pinned.RECENT_TIMELINE),
-                                   ("last_session", anchor_pinned.LAST_SESSION)):
-                    text = anchor_pinned.read_file(pinned_dir, fname)
-                    if text:
-                        result[key] = text
+                _attach_pinned_layer(result, pinned_dir)
                 # v1.15: today's invitation card, when a pool exists. An offer,
                 # not an instruction — see anchor_invite.render_block.
                 try:
@@ -991,6 +986,24 @@ def run_http(db_path: str, pinned_dir: str = None, host: str = "127.0.0.1",
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
+def _attach_pinned_layer(result: dict, pinned_dir: str) -> dict:
+    """Add the pinned file layer to a wakeup() result, in place. One function for both wakeup
+    paths (the MCP tool and --wakeup-text) so they cannot drift again.
+
+    v1.17.1: identity files are included. Until now only three hard-coded filenames were read
+    here, so in an MCP-only setup a file written with write_identity_file never reached a window."""
+    ident = anchor_pinned.load_identity_files(pinned_dir)
+    if ident:
+        result["identity"] = ident
+    for key, fname in (("session_state", anchor_pinned.SESSION_STATE),
+                       ("recent_timeline", anchor_pinned.RECENT_TIMELINE),
+                       ("last_session", anchor_pinned.LAST_SESSION)):
+        text = anchor_pinned.read_file(pinned_dir, fname)
+        if text:
+            result[key] = text
+    return result
+
+
 def format_wakeup_text(data: dict) -> str:
     """Format a wakeup() dict as plain text, for hook/prompt injection.
 
@@ -1006,6 +1019,8 @@ def format_wakeup_text(data: dict) -> str:
             lines.append(text)
             lines.append("")
 
+    for f in data.get("identity") or []:
+        file_section(f"Identity file: {f.get('name', '')}", f.get("content"))
     file_section("Session state (your own rolling state)", data.get("session_state"))
     file_section("Previous window (mechanical tail)", data.get("last_session"))
     file_section("Recent timeline", data.get("recent_timeline"))
@@ -1069,12 +1084,7 @@ if __name__ == "__main__":
     if args.wakeup_text:
         from anchor_db import AnchorDB
         data = AnchorDB(os.path.join(args.db_path, "memories.db")).wakeup()
-        for key, fname in (("session_state", anchor_pinned.SESSION_STATE),
-                           ("recent_timeline", anchor_pinned.RECENT_TIMELINE),
-                           ("last_session", anchor_pinned.LAST_SESSION)):
-            text = anchor_pinned.read_file(pinned, fname)
-            if text:
-                data[key] = text
+        _attach_pinned_layer(data, pinned)
         print(format_wakeup_text(data))
         sys.exit(0)
 
