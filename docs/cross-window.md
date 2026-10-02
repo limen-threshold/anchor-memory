@@ -93,3 +93,8 @@ If you build an adapter for a platform we can't reach (browser extension for web
 **The continuity header is baked in at write time.** `session_state.md` is stored with a header stating it's the AI's own rolling state — a continuation, not a message from someone else. Write-side deliberately: framing that only exists in the read path gets lost whenever the read path changes, and without it, "notes for the next window" phrasing drifts into the AI treating its next instance as a different entity.
 
 **Temporal anchoring on recall.** Recalled memories carry dates, and the injection explicitly says "that date is when it happened, not now" — otherwise a memory saying "the meeting is tomorrow" reads as a live plan months later.
+
+
+## Optional input understanding (v1.19)
+
+Set `ANCHOR_UNDERSTANDING=1` to replace the proxy intent gate with evidence-labelled understanding and batched source review. MCP-only setups can call `understand_and_recall`; there is no automatic per-turn listener in MCP. No configured helper retains original-word recall. Saved timestamps are metadata, not event dates. Analysis does not enter curator storage or continuity tails. [中文部署指南](input-understanding_zh.md) · [English](input-understanding.md).

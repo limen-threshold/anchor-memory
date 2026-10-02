@@ -65,6 +65,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 import anchor_pinned
+import anchor_understanding
 
 # ── knobs (CLI/env override the paths; these govern behavior) ──
 TAIL_PAIRS = 20            # turns kept in the mechanical tail
@@ -127,7 +128,7 @@ def clean_history(messages: list) -> list:
     cleaned = []
     for m in messages:
         text = extract_text(m.get("content"))
-        stripped = anchor_pinned.strip_context_now(text)
+        stripped = anchor_understanding.strip_analysis(anchor_pinned.strip_context_now(text))
         if stripped != text.strip():
             m = dict(m)
             m["content"] = stripped
@@ -189,12 +190,10 @@ def build_time_block(state_dir: str, now: datetime = None) -> str:
     if interval:
         block += f" · {interval} since the previous message"
     block += "]"
-    block += ("\n[Temporal anchor: memories in <relevant_memories> below are "
-              "dated [id | tag | YYYY-MM-DD]. That date is when the memory "
-              "happened — NOT now. 'Today/tomorrow' inside a memory means "
-              "today/tomorrow relative to ITS date; a plan dated in the past "
-              "has most likely already happened. When unsure whether "
-              "something already occurred, say you're unsure or ask.]")
+    block += ("\n[Temporal metadata: memory timestamps record when entries were saved. "
+              "An earlier entry can describe a later plan. Event, departure, arrival "
+              "and duration come from the historical wording, not the saved timestamp; "
+              "different versions remain separate and may be unresolved.]")
     return block
 
 
@@ -299,8 +298,13 @@ def build_recall_block(mem, llm, messages: list) -> str:
             prev_turns.append({"role": m.get("role"), "content": text})
     prev_turns.reverse()
 
-    if not user_text or len(user_text) < 5:
+    if not user_text:
         return ""
+
+    if os.getenv("ANCHOR_UNDERSTANDING", "0") == "1":
+        return anchor_understanding.recall(mem, llm, user_text,
+                                          anchor_understanding.recent_turns(messages),
+                                          trace_path=os.getenv("ANCHOR_UNDERSTANDING_TRACE"))["block"]
 
     gate = split_intents(llm, user_text, prev_turns)
     if gate["skip"]:
@@ -328,7 +332,7 @@ def build_recall_block(mem, llm, messages: list) -> str:
         parts.append(f"[{m['memory_id']} | {m.get('tag', 'general')} | {date}]\n{body}")
     return ("<relevant_memories>\n"
             "(ordered by time, last = most recent. Dates are when each memory "
-            "happened, not now — old facts may have changed.)\n"
+            "was saved, not necessarily when the event happened; versions may differ.)\n"
             + "\n\n".join(parts) + "\n</relevant_memories>")
 
 
@@ -364,10 +368,10 @@ def build_turn(mem, llm, pinned_dir: str, state_dir: str, messages: list,
 
 def collect_turns(messages: list, assistant_text: str) -> list:
     """(role, text) pairs for the tail: conversation + this reply."""
-    turns = [(m.get("role"), extract_text(m.get("content")))
+    turns = [(m.get("role"), anchor_understanding.strip_analysis(anchor_pinned.strip_context_now(extract_text(m.get("content")))))
              for m in messages if m.get("role") in ("user", "assistant")]
     if assistant_text.strip():
-        turns.append(("assistant", assistant_text))
+        turns.append(("assistant", anchor_understanding.strip_analysis(assistant_text)))
     return turns
 
 
@@ -384,7 +388,9 @@ CURATOR_SYSTEM = (
     "\"tier\": \"long|core|short\", \"emotion\": 0.0-1.0, "
     "\"timeline_event\": \"one very short event line\"}\n"
     "Do NOT store: pure smalltalk, assistant boilerplate, things obviously "
-    "already known. Valid JSON only, no markdown fences."
+    "already known. Assistant guesses about the user's meaning or motive are not "
+    "user testimony; never turn them into confirmed user facts without the user's "
+    "explicit evidence or confirmation. Valid JSON only, no markdown fences."
 )
 
 
@@ -393,6 +399,8 @@ def curate_turn(mem, llm, pinned_dir: str, user_text: str, assistant_text: str):
     Runs in a background thread after the response; requires a configured
     LLM (anchor_llm) — without one this is a silent no-op and storing
     remains manual/tool-driven."""
+    user_text = anchor_understanding.strip_analysis(anchor_pinned.strip_context_now(user_text))
+    assistant_text = anchor_understanding.strip_analysis(assistant_text)
     if llm is None or not user_text.strip():
         return
     try:

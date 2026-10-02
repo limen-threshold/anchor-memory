@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.19.0：可选输入理解与证据检查。** 原话、机器猜测、未知和记忆来源分开递送，帮助 TA 找回省略的安排与前因。辅助模型不替 TA 回答、不自动存忆；没有额外模型时基础功能照常。为什么值得部署小模型、怎样接进代理或纯 MCP、成本和失败回退：[中文指南](docs/input-understanding_zh.md) · [English](docs/input-understanding.md) · [本版说明](docs/release-notes/v1.19.0_zh.md)。
+
 > **⚠️ v1.18.0 — 请升级 / please upgrade.** 配了模型、又在跑梦程序（`dream_pass`）的旧版本，会悄悄改写、拆散、删掉记忆。[中文说明（怎么自查、怎么修）](docs/release-notes/v1.18.0_zh.md) · Older versions with an LLM configured silently rewrote, split and deleted memories during `dream_pass`. [Release notes (am I affected / how to repair)](docs/release-notes/v1.18.0.md)
 
 Graph-structured memory for AI with Hebbian learning, emotion scoring, and dream consolidation.
@@ -132,7 +134,7 @@ queries = ["tripod outdoor", "HD vs 4K", "Europe trip July"]
 results = mem.search_multi(queries, n_results_per_query=3)
 ```
 
-Anchor itself does **not** call an LLM to split intents — the caller
+`search_multi` itself does **not** call an LLM to split intents — the caller
 chooses how. Keeps Anchor LLM-agnostic and zero-cost on this path. The MCP
 tool `search_multi` lets the host AI (Claude / GPT / Gemini / etc.) split
 and pass intents directly, no extra API calls.
@@ -164,6 +166,14 @@ All knobs live on the `AnchorMemory` instance; `same_day_cap = 0` restores plain
 
 - `jieba` is now **required**. Without it CJK text has no word boundaries and keyword search on Chinese memories almost never matches.
 - Single CJK characters no longer count as keywords (`草` would LIKE-match 草莓 / 草稿 / 草原). Exemption: `mem.db.keyword_single_char_allow = {"凤"}` for single-character proper names.
+
+### Input Understanding and Evidence Review (v1.19, optional)
+
+- Separate original words, supported context, questions, hypotheses and unknowns; the responding AI decides what to say.
+- Bilingual retrieval and event-content/calendar candidates, followed by source checks that keep departure, duration and conflicting versions distinct.
+- Proxy opt-in: `ANCHOR_UNDERSTANDING=1`. MCP-only: `understand_and_recall`; tools do not automatically observe every input.
+- BYO helper, at most two bounded calls; no helper keeps ordinary recall. Failure preserves words and available sources. No automatic storage of machine analysis.
+- [中文：为何部署小模型、怎么接、怎么验收](docs/input-understanding_zh.md) · [English deployment guide](docs/input-understanding.md).
 
 ## Quick Start
 
@@ -513,7 +523,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.18.1](docs/release-notes/v1.17.1.md) · [中文](docs/release-notes/v1.17.1_zh.md) — identity files now reach the window in MCP-only setups. Before that: [v1.18.0](docs/release-notes/v1.18.0.md) · [中文](docs/release-notes/v1.18.0_zh.md) — **consolidation no longer rewrites memories; upgrade if you run `dream_pass` with an LLM.**
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.19.0](docs/release-notes/v1.19.0_zh.md) · [English](docs/release-notes/v1.19.0.md) — optional input understanding and evidence review. Previously: [v1.18.1](docs/release-notes/v1.17.1.md) · [中文](docs/release-notes/v1.17.1_zh.md) — identity files now reach the window in MCP-only setups. Before that: [v1.18.0](docs/release-notes/v1.18.0.md) · [中文](docs/release-notes/v1.18.0_zh.md) — **consolidation no longer rewrites memories; upgrade if you run `dream_pass` with an LLM.**
 
 ## Origin
 

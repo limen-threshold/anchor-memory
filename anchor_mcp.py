@@ -57,6 +57,22 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     # MCP tool definitions
     TOOLS = [
         {
+            "name": "understand_and_recall",
+            "description": "Optional BYO helper: analyse the current utterance, retrieve bilingual facts/context, and check historical evidence. Returns original words, labelled machine hypotheses/unknowns, sources and decisions separately. Read-only: no memory storage, citations or Hebbian updates. Without a helper, returns ordinary recall and unresolved questions. The responding AI chooses what to say and can ask or search further.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "current": {"type": "string", "description": "Complete current original utterance."},
+                    "recent": {"type": "array", "maxItems": 4, "items": {
+                        "type": "object", "properties": {"role": {"type": "string", "enum": ["user", "assistant"]}, "content": {"type": "string"}}, "required": ["role", "content"]}},
+                    "now": {"type": "string", "description": "Optional ISO local timestamp with offset. Defaults to server local time."},
+                    "exclude_tags": {"type": "array", "items": {"type": "string"}},
+                    "n": {"type": "integer", "minimum": 1, "maximum": 12, "default": 12}
+                },
+                "required": ["current"]
+            }
+        },
+        {
             "name": "store_memory",
             "description": "Store a new memory. Memories are nodes in a graph — they can be connected to other memories and carry emotional weight.",
             "inputSchema": {
@@ -502,7 +518,15 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     def handle_tool(name: str, args: dict) -> dict:
         """Execute a tool and return result."""
         try:
-            if name == "store_memory":
+            if name == "understand_and_recall":
+                from anchor_understanding import recall
+                from anchor_proxy import get_llm_or_none
+                now = datetime.fromisoformat(args["now"]) if args.get("now") else None
+                return recall(mem, get_llm_or_none(), args["current"], args.get("recent"), now=now,
+                              exclude_tags=tuple(args.get("exclude_tags") or ()),
+                              trace_path=os.getenv("ANCHOR_UNDERSTANDING_TRACE"), n=args.get("n", 12))
+
+            elif name == "store_memory":
                 mid = f"mem_{uuid.uuid4().hex[:8]}"
                 stored_id = mem.store(
                     memory_id=mid,
@@ -760,7 +784,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.18.1"
+SERVER_VERSION = "1.19.0"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).
