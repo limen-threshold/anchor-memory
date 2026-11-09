@@ -2,3 +2,4 @@ data/
 tmp/
 logs/
 results*.jsonl
+diag_lanes.jsonl
