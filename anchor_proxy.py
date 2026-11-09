@@ -65,6 +65,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 import anchor_pinned
+import anchor_transcript
 import anchor_understanding
 
 # ── knobs (CLI/env override the paths; these govern behavior) ──
@@ -432,7 +433,8 @@ def curate_turn(mem, llm, pinned_dir: str, user_text: str, assistant_text: str):
 
 def after_response(mem, llm, pinned_dir: str, messages: list, assistant_text: str):
     """Everything that runs after the reply is complete: mechanical tail
-    overwrite (every turn — that's what makes it crash-proof), then curator."""
+    overwrite (every turn — that's what makes it crash-proof), transcript
+    append (v1.20, the raw words — ANCHOR_TRANSCRIPT=0 to turn off), then curator."""
     try:
         anchor_pinned.write_tail(pinned_dir, collect_turns(messages, assistant_text),
                                  max_pairs=TAIL_PAIRS)
@@ -443,6 +445,15 @@ def after_response(mem, llm, pinned_dir: str, messages: list, assistant_text: st
         if m.get("role") == "user":
             user_text = extract_text(m.get("content"))
             break
+    if os.getenv("ANCHOR_TRANSCRIPT", "1") != "0":
+        try:
+            db_path = getattr(mem, "db_path", None) or os.path.dirname(getattr(getattr(mem, "db", None), "db_path", "") or "")
+            if db_path:
+                clean_user = anchor_understanding.strip_analysis(anchor_pinned.strip_context_now(user_text))
+                anchor_transcript.append(db_path, "user", clean_user)
+                anchor_transcript.append(db_path, "assistant", anchor_understanding.strip_analysis(assistant_text))
+        except Exception as e:
+            print(f"[anchor_proxy] transcript write error: {e}")
     curate_turn(mem, llm, pinned_dir, user_text, assistant_text)
 
 
@@ -484,6 +495,11 @@ def create_app(db_path: str, pinned_dir: str, upstream: str, upstream_model: str
     mem = AnchorMemory(db_path=db_path)
     llm = get_llm_or_none()
     print(f"[anchor_proxy] db={db_path} pinned={pinned_dir} upstream={upstream}")
+    try:   # v1.20: size readout for the always-injected layer (a warning, never a cut)
+        sz = anchor_pinned.injection_size(pinned_dir)
+        print(f"[anchor_proxy] injected layer: {sz['lines']} lines / {sz['kb']} KB" + (" — OVER the suggested limit (200 lines / 25 KB): long always-on context gets skimmed, move detail out of pinned" if sz["over"] else ""))
+    except Exception:
+        pass
     print(f"[anchor_proxy] gate/curator LLM: {getattr(llm, 'model', None) or 'NOT CONFIGURED (zero-LLM floor: tail/pinned/recall still on; intent-split + auto-curator off)'}")
 
     app = FastAPI(title="Anchor Continuity Proxy")

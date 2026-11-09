@@ -242,6 +242,31 @@ def load_pinned(pinned_dir: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+INJECT_LIMIT_LINES = 200       # v1.20: beyond roughly this, always-on context gets skimmed, not read
+INJECT_LIMIT_BYTES = 25 * 1024  # (Anthropic's agent-memory write-up uses ~200 lines / 25 KB as the ceiling for the injected layer)
+
+
+def injection_size(pinned_dir: str) -> dict:
+    """How big the always-injected layer is right now — the same files load_pinned()
+    joins, per file and in total. Returns {"files": [{name, lines, bytes}], "lines",
+    "bytes", "kb", "over", "limit_lines", "limit_bytes"}. A readout only: nothing is
+    trimmed or rewritten. Use it to notice when pinned has quietly grown past what a
+    model reads carefully, and move detail into memories (searchable) instead."""
+    files = []
+    if pinned_dir and os.path.isdir(pinned_dir):
+        for name in _ordered_names(pinned_dir):
+            if name in (LAST_SESSION, INVITATION_POOL):
+                continue
+            text = read_file(pinned_dir, name)
+            if text:
+                files.append({"name": name, "lines": text.count("\n") + 1, "bytes": len(text.encode("utf-8"))})
+    lines = sum(f["lines"] for f in files)
+    size = sum(f["bytes"] for f in files)
+    return {"files": files, "lines": lines, "bytes": size, "kb": round(size / 1024, 1),
+            "over": lines > INJECT_LIMIT_LINES or size > INJECT_LIMIT_BYTES,
+            "limit_lines": INJECT_LIMIT_LINES, "limit_bytes": INJECT_LIMIT_BYTES}
+
+
 def read_tail(pinned_dir: str) -> str:
     """The mechanical tail of the previous window ('' if none yet)."""
     return read_file(pinned_dir, LAST_SESSION)

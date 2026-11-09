@@ -387,7 +387,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("data_dir")
-    p.add_argument("command", choices=["count", "list", "delete", "demote", "backup", "ui"])
+    p.add_argument("command", choices=["count", "list", "delete", "demote", "backup", "ui", "injection"])
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--tier", choices=["core", "long", "short"])
     p.add_argument("--source")
@@ -402,6 +402,14 @@ def main():
     args = p.parse_args()
 
     data_dir = os.path.expanduser(args.data_dir)
+    if args.command == "injection":   # v1.20: how big the always-injected layer is (no DB needed)
+        import anchor_pinned
+        sz = anchor_pinned.injection_size(os.path.join(data_dir, "pinned"))
+        for f in sz["files"]:
+            print(f"{f['name']:32} {f['lines']:5} lines {f['bytes']/1024:7.1f} KB")
+        print(f"{'TOTAL':32} {sz['lines']:5} lines {sz['kb']:7.1f} KB  (suggested ceiling {sz['limit_lines']} lines / {sz['limit_bytes']//1024} KB)"
+              + ("  — OVER: long always-on context gets skimmed; move detail into memories" if sz["over"] else "  — fine"))
+        return
     conn = _connect(data_dir)
     {"count": cmd_count, "list": cmd_list, "delete": cmd_delete,
      "demote": cmd_demote, "backup": cmd_backup,

@@ -161,6 +161,7 @@ class AnchorMemory:
             name="memories",
             metadata={"hnsw:space": "cosine"},
         )
+        self.db_path = db_path   # the data directory (transcripts/, verify_ledger.jsonl live beside the DB; v1.20)
         self._db_path = os.path.join(db_path, "memories.db")
         self.db = AnchorDB(self._db_path)
         # Eager concept-based linking on store(). Default OFF in v1.7.1 after
@@ -891,7 +892,8 @@ class AnchorMemory:
                    strong_edge_decay_factor: float = 0.95,
                    emotion_nudge: float = 0.05,
                    auto_discover: bool = True,
-                   split: bool = False, llm=None) -> dict:
+                   split: bool = False, llm=None,
+                   verify: bool = False, verify_days: int = 7) -> dict:
         """Run memory consolidation — like sleep for the brain.
 
         - Decay short-tier memories older than N days
@@ -959,6 +961,15 @@ class AnchorMemory:
                 results["split_memories"] = self.split_bundled(batch_size=50, dry_run=False, llm=llm)
             except Exception:
                 results["split_memories"] = 0
+
+        # 7. Check recent memories against the raw transcripts — opt-in (v1.20).
+        #    Writes a verdict as an annotation + ledger line; never rewrites or deletes.
+        if verify:
+            try:
+                import dream_extras
+                results["verify"] = dream_extras.verify_recent(self, llm=llm, days=verify_days)
+            except Exception as e:
+                results["verify"] = {"skipped": f"{type(e).__name__}: {e}"}
 
         return results
 

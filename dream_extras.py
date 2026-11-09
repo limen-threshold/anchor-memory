@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 # v1.9: use the LLM abstraction. Direct anthropic import kept as fallback only
@@ -355,6 +355,119 @@ def run_fact_check(mem, group_threshold: float = 0.65, max_groups: int = 40,
     return {"groups": len(groups), "contradictions": len(findings), "report": out}
 
 
+
+# ──────── v1.20: check recent memories against the raw transcripts ────────
+
+VERIFY_SYSTEM = (
+    "You check whether a stored memory is supported by the raw conversation it came from. "
+    "Output JSON only: {\"verdict\": \"supported|unsupported|unclear\", "
+    "\"quote\": \"one verbatim transcript line that supports or contradicts it, or empty\", "
+    "\"note\": \"<=30 words, in the conversation's language\"}.\n"
+    "supported = the transcript says this (same facts, same person, same direction). "
+    "unsupported = the transcript contradicts it, or the memory asserts something no line says "
+    "(an assistant guess written down as a user fact counts as unsupported). "
+    "unclear = partly there, or the transcript excerpt is too thin to tell. No markdown fences."
+)
+
+
+def _transcript_around(db_path: str, ts: str, window_hours: float, max_chars: int) -> list:
+    import anchor_transcript
+    try:
+        t0 = datetime.fromisoformat(ts.replace("Z", ""))
+    except Exception:
+        return []
+    start = (t0 - timedelta(hours=window_hours)).isoformat(timespec="seconds")
+    end = (t0 + timedelta(hours=window_hours)).isoformat(timespec="seconds")
+    rows = anchor_transcript.lines_between(db_path, start, end)
+    # nearest lines first when trimming, then back to chronological
+    rows.sort(key=lambda r: abs((datetime.fromisoformat(r["ts"]) - t0).total_seconds()))
+    keep, used = [], 0
+    for r in rows:
+        n = len(r.get("text", "")) + 24
+        if used + n > max_chars:
+            break
+        keep.append(r); used += n
+    keep.sort(key=lambda r: r.get("ts", ""))
+    return keep
+
+
+def verify_recent(mem, llm=None, days: int = 7, window_hours: float = 3.0,
+                  max_items: int = 60, max_chars: int = 6000, dry_run: bool = False) -> dict:
+    """Dream-time evidence check (v1.20): for memories stored in the last `days`,
+    pull the transcript lines within ±window_hours of the memory's timestamp and
+    ask the BYO LLM whether the memory is supported. Each verdict is written as an
+    annotation on the memory ("[verify YYYY-MM-DD] supported: …") and a line in
+    <db>/verify_ledger.jsonl; memories already carrying a [verify …] annotation are
+    skipped. Nothing is rewritten, re-tiered or deleted — the verdict is for the
+    reader (and for whoever runs the next dream pass) to act on.
+
+    No transcripts around the memory → counted as no_transcript, no annotation
+    (so the memory is checked again once transcripts exist). No LLM → ConfigError
+    (dream_pass reports it as skipped)."""
+    llm = _resolve_llm(llm)
+    db_path = getattr(mem, "db_path", None) or os.path.dirname(getattr(getattr(mem, "db", None), "db_path", "") or "")
+    if not db_path:
+        return {"skipped": "no db_path"}
+    end = datetime.now().isoformat(timespec="seconds")
+    start = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+    rows = mem.db.memories_by_date_range(start, "9999", limit=5000)
+    ledger = os.path.join(db_path, "verify_ledger.jsonl")
+    stats = {"checked": 0, "supported": 0, "unsupported": 0, "unclear": 0, "no_transcript": 0, "skipped_done": 0, "errors": 0}
+    for row in rows:
+        if stats["checked"] >= max_items:
+            break
+        mid = row["memory_id"]
+        try:
+            if any(str(a.get("text", "")).startswith("[verify ") for a in mem.db.get_annotations(mid)):
+                stats["skipped_done"] += 1
+                continue
+        except Exception:
+            pass
+        lines = _transcript_around(db_path, row.get("timestamp", ""), window_hours, max_chars)
+        if not lines:
+            stats["no_transcript"] += 1
+            continue
+        excerpt = "\n".join(f"[{r['ts'][11:16]}] {r['role']}: {r['text']}" for r in lines)
+        context = ""
+        try:
+            context = mem.db.get_context(mid) or ""
+        except Exception:
+            pass
+        user = (f"MEMORY ({row.get('timestamp', '')[:16]}):\n{row.get('text', '')}\n"
+                + (f"\nMEMORY CONTEXT QUOTE:\n{context[:600]}\n" if context else "")
+                + f"\nTRANSCRIPT (±{window_hours:g}h):\n{excerpt}")
+        stats["checked"] += 1
+        if dry_run:
+            continue
+        try:
+            raw = llm.call(system=VERIFY_SYSTEM, user=user, max_tokens=300, temperature=0.0).text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            data = json.loads(raw)
+            verdict = str(data.get("verdict", "unclear")).strip().lower()
+            if verdict not in ("supported", "unsupported", "unclear"):
+                verdict = "unclear"
+            quote = str(data.get("quote", ""))[:200]
+            note = str(data.get("note", ""))[:200]
+        except Exception as e:
+            stats["errors"] += 1
+            verdict, quote, note = "unclear", "", f"verifier error: {type(e).__name__}"
+        stats[verdict] += 1
+        day = datetime.now().strftime("%Y-%m-%d")
+        try:
+            mem.db.annotate(mid, f"[verify {day}] {verdict}: {note}" + (f" | {quote}" if quote else ""))
+            mem.db.log_event(mid, "verified", verdict)
+        except Exception:
+            pass
+        try:
+            with open(ledger, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": end, "memory_id": mid, "verdict": verdict, "quote": quote, "note": note,
+                                    "transcript_lines": len(lines), "model": getattr(llm, "model", None)}, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+    return stats
+
+
 if __name__ == "__main__":
     import argparse
     from anchor_memory import AnchorMemory
@@ -362,6 +475,8 @@ if __name__ == "__main__":
     ap.add_argument("--db", default="./anchor_db", help="Path to AnchorMemory DB")
     ap.add_argument("--dedup", action="store_true")
     ap.add_argument("--fact-check", action="store_true")
+    ap.add_argument("--verify", action="store_true", help="v1.20: check memories from the last --days days against the raw transcripts")
+    ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--threshold", type=float, default=0.92)
     ap.add_argument("--audit-dir", default="./anchor_audit")
@@ -371,3 +486,5 @@ if __name__ == "__main__":
         print(run_global_dedup(mem, threshold=args.threshold, dry_run=args.dry_run, audit_dir=args.audit_dir))
     if args.fact_check:
         print(run_fact_check(mem, audit_dir=args.audit_dir))
+    if args.verify:
+        print(verify_recent(mem, days=args.days, dry_run=args.dry_run))

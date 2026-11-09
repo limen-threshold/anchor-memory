@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.20.0：原话可搜、注入层体积读数、做梦时对原话核记忆。** 代理把每句话落成按天的原始对话文件，`search_transcript` 按关键词和日期翻原话、不经过任何模型；`wakeup()` 报开场注入那层有多大（超过约 200 行 / 25 KB 就提醒，不代删）；`dream_pass(verify=True)` 拿前后三小时的原话核对新记忆，结论只写成批注和账本，不改写不删。[中文说明](docs/release-notes/v1.20.0_zh.md) · [English](docs/release-notes/v1.20.0.md)。
+
 > **v1.19.0：可选输入理解与证据检查。** 原话、机器猜测、未知和记忆来源分开递送，帮助 TA 找回省略的安排与前因。辅助模型不替 TA 回答、不自动存忆；没有额外模型时基础功能照常。为什么值得部署小模型、怎样接进代理或纯 MCP、成本和失败回退：[中文指南](docs/input-understanding_zh.md) · [English](docs/input-understanding.md) · [本版说明](docs/release-notes/v1.19.0_zh.md)。
 
 > **⚠️ v1.18.0 — 请升级 / please upgrade.** 配了模型、又在跑梦程序（`dream_pass`）的旧版本，会悄悄改写、拆散、删掉记忆。[中文说明（怎么自查、怎么修）](docs/release-notes/v1.18.0_zh.md) · Older versions with an LLM configured silently rewrote, split and deleted memories during `dream_pass`. [Release notes (am I affected / how to repair)](docs/release-notes/v1.18.0.md)
@@ -166,6 +168,13 @@ All knobs live on the `AnchorMemory` instance; `same_day_cap = 0` restores plain
 
 - `jieba` is now **required**. Without it CJK text has no word boundaries and keyword search on Chinese memories almost never matches.
 - Single CJK characters no longer count as keywords (`草` would LIKE-match 草莓 / 草稿 / 草原). Exemption: `mem.db.keyword_single_char_allow = {"凤"}` for single-character proper names.
+
+### Raw Transcripts, Injected-Layer Size, Dream-Time Evidence Check (v1.20)
+
+- Transcripts are a first-class layer: the proxy appends every exchange to `<db_path>/transcripts/YYYY-MM-DD.jsonl` (`ANCHOR_TRANSCRIPT=0` to turn off); MCP `search_transcript` (keyword + date, results spread across days newest-first) and `record_transcript` for MCP-only setups. No model involved.
+- `anchor_pinned.injection_size()` / `wakeup().injected_layer_size` / `anchor_admin.py <dir> injection`: how big the always-injected layer is against a ~200 lines / 25 KB ceiling. A readout, never a cut.
+- `dream_pass(verify=True)` (BYO model, opt-in): checks memories from the last 7 days against the transcript lines around their timestamp; verdict written as an annotation + `verify_ledger.jsonl`. Nothing rewritten, re-tiered or deleted.
+- [中文说明](docs/release-notes/v1.20.0_zh.md) · [English release notes](docs/release-notes/v1.20.0.md).
 
 ### Input Understanding and Evidence Review (v1.19, optional)
 
@@ -523,7 +532,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.19.0](docs/release-notes/v1.19.0_zh.md) · [English](docs/release-notes/v1.19.0.md) — optional input understanding and evidence review. Previously: [v1.18.1](docs/release-notes/v1.17.1.md) · [中文](docs/release-notes/v1.17.1_zh.md) — identity files now reach the window in MCP-only setups. Before that: [v1.18.0](docs/release-notes/v1.18.0.md) · [中文](docs/release-notes/v1.18.0_zh.md) — **consolidation no longer rewrites memories; upgrade if you run `dream_pass` with an LLM.**
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.20.0](docs/release-notes/v1.20.0_zh.md) · [English](docs/release-notes/v1.20.0.md) — raw transcripts as a searchable layer, injected-layer size readout, dream-time evidence check. Previous: [v1.19.0](docs/release-notes/v1.19.0_zh.md) · [English](docs/release-notes/v1.19.0.md)
 
 ## Origin
 

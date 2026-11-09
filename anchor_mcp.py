@@ -57,6 +57,31 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     # MCP tool definitions
     TOOLS = [
         {
+            "name": "search_transcript",
+            "description": "v1.20: search the RAW transcripts (what was actually said, line by line), not the memories. Use when a memory looks wrong or thin and you want the original words, or when you know roughly when something was said. Keyword-and-date only, no model in between: every term must appear; optional date range (YYYY-MM-DD, inclusive). Results spread across days newest-first so one busy day cannot hide an older match. Transcripts are written by the proxy after every reply (or by record_transcript); if you run MCP-only without logging, this returns nothing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Words that must all appear (space-separated). Empty = every line in the date range."},
+                    "date_from": {"type": "string", "description": "YYYY-MM-DD, inclusive."},
+                    "date_to": {"type": "string", "description": "YYYY-MM-DD, inclusive."},
+                    "limit": {"type": "integer", "description": "Max lines returned (default 20).", "default": 20}
+                }
+            }
+        },
+        {
+            "name": "record_transcript",
+            "description": "v1.20: append one line to the raw transcript (for MCP-only setups with no proxy in the path — the proxy logs every exchange by itself). role is user or assistant. Exact repeats of a recent line are ignored.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string", "enum": ["user", "assistant"]},
+                    "text": {"type": "string"}
+                },
+                "required": ["role", "text"]
+            }
+        },
+        {
             "name": "understand_and_recall",
             "description": "Optional BYO helper: analyse the current utterance, retrieve bilingual facts/context, and check historical evidence. Returns original words, labelled machine hypotheses/unknowns, sources and decisions separately. Read-only: no memory storage, citations or Hebbian updates. Without a helper, returns ordinary recall and unresolved questions. The responding AI chooses what to say and can ask or search further.",
             "inputSchema": {
@@ -237,7 +262,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
             "description": "Run memory consolidation — like sleep for the brain. Forgets expired short-tier memories (each is archived to deleted_memories.jsonl first), prunes weak connections, discovers new ones, equilibrates emotion scores. It never rewrites, splits or merges what a memory says. Run daily.",
             "inputSchema": {
                 "type": "object",
-                "properties": {}
+                "properties": {"verify": {"type": "boolean", "description": "v1.20: also check memories from the last verify_days days against the raw transcripts (needs a configured LLM; writes a [verify] annotation per memory, never rewrites or deletes).", "default": False}, "verify_days": {"type": "integer", "default": 7}}
             }
         },
         {
@@ -609,8 +634,18 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                 success = mem.delete(args["memory_id"])
                 return {"status": "deleted" if success else "not_found"}
 
+            elif name == "search_transcript":
+                import anchor_transcript
+                res = anchor_transcript.search(db_path, args.get("query", ""), args.get("date_from"), args.get("date_to"), args.get("limit", 20))
+                return {"text": anchor_transcript.format_hits(res), "total": res["total"], "per_day": res["per_day"], "truncated": res["truncated"]}
+
+            elif name == "record_transcript":
+                import anchor_transcript
+                path = anchor_transcript.append(db_path, args.get("role", ""), args.get("text", ""))
+                return {"status": "appended" if path else "ignored", "file": path}
+
             elif name == "dream_pass":
-                stats = mem.dream_pass()
+                stats = mem.dream_pass(verify=bool(args.get("verify", False)), verify_days=int(args.get("verify_days", 7) or 7))
                 return {"status": "complete", **stats}
 
             elif name == "set_emotion":
@@ -705,6 +740,11 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                 # only when the files exist; MCP-only setups get the same
                 # bridges as proxy setups, minus per-turn mechanics.
                 _attach_pinned_layer(result, pinned_dir)
+                try:   # v1.20: size of the always-injected layer; a note only when it is past what gets read carefully
+                    sz = anchor_pinned.injection_size(pinned_dir)
+                    result["injected_layer_size"] = {"lines": sz["lines"], "kb": sz["kb"], "over_limit": sz["over"]}
+                except Exception:
+                    pass
                 # v1.15: today's invitation card, when a pool exists. An offer,
                 # not an instruction — see anchor_invite.render_block.
                 try:
@@ -784,7 +824,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.19.0"
+SERVER_VERSION = "1.20.0"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).
