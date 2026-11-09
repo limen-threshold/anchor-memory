@@ -80,6 +80,17 @@ Not comparable one-to-one with numbers published by other systems (e.g. MemPalac
 "96.6 % R@5"): granularity (turn vs session), top-k definition and the "any/all"
 convention differ between write-ups, and this run does no reranking and no QA.
 
+## Results — 2026-11-09, Anchor v1.21 (same protocol, after the two fixes below)
+
+| lane | R@5 any | R@5 all | R@10 any | R@10 all |
+|---|---|---|---|---|
+| `anchor_default` | 95.8 | **80.6** (was 70.2) | 97.8 | **91.4** (was 75.8) |
+| `anchor_plain` | 95.8 | 80.6 | 97.8 | 91.4 |
+| `vector_only` | 97.0 | 86.6 | 99.0 | 94.8 |
+| `transcript_kw` | 30.4 | 20.8 | 30.4 | 21.0 |
+
+By type, R@5 all, default lane: multi-session 58.6 → 66.9, temporal-reasoning 38.3 → 69.2, knowledge-update 92.3 → 94.9, single-session-user 94.3 → 95.7, single-session-preference 93.3 → 83.3 (n=30; the old keyword flood happened to help these — open item). Default and plain are now identical: with entities set the cap never bites. The remaining gap to the embedder is keyword rows with two matched tokens outranking weaker vector hits. Full tables: `summary_v121_20261109.txt`; v1.20 tables: `runs_v120/summary_20261109.txt`.
+
 ## Findings (2026-11-09, first run)
 
 **Ablation** (`diag_lanes.py`): on the 84 questions where the raw embedder had every

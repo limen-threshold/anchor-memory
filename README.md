@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.21.0：第一次跑公开基准，修掉检索层两处病。** LongMemEval-S 零模型检索跑分（`benchmarks/longmemeval/`）显示 Anchor 自带的 embedder 单独跑 86.6% 的题能捞全证据，搭在上面的检索逻辑只剩 70.2%；消融定位到两处——同日上限把一天里不相干的会话算成一件事、关键词车道给任何 LIKE 命中固定 0.6 分被英文虚词灌满。这版：上限按「日+会话(entity)」计、关键词车道去虚词按命中词数给分；接口不动。[中文说明](docs/release-notes/v1.21.0_zh.md) · [English](docs/release-notes/v1.21.0.md)。
+
 > **v1.20.0：原话可搜、注入层体积读数、做梦时对原话核记忆。** 代理把每句话落成按天的原始对话文件，`search_transcript` 按关键词和日期翻原话、不经过任何模型；`wakeup()` 报开场注入那层有多大（超过约 200 行 / 25 KB 就提醒，不代删）；`dream_pass(verify=True)` 拿前后三小时的原话核对新记忆，结论只写成批注和账本，不改写不删。[中文说明](docs/release-notes/v1.20.0_zh.md) · [English](docs/release-notes/v1.20.0.md)。
 
 > **v1.19.0：可选输入理解与证据检查。** 原话、机器猜测、未知和记忆来源分开递送，帮助 TA 找回省略的安排与前因。辅助模型不替 TA 回答、不自动存忆；没有额外模型时基础功能照常。为什么值得部署小模型、怎样接进代理或纯 MCP、成本和失败回退：[中文指南](docs/input-understanding_zh.md) · [English](docs/input-understanding.md) · [本版说明](docs/release-notes/v1.19.0_zh.md)。
@@ -168,6 +170,12 @@ All knobs live on the `AnchorMemory` instance; `same_day_cap = 0` restores plain
 
 - `jieba` is now **required**. Without it CJK text has no word boundaries and keyword search on Chinese memories almost never matches.
 - Single CJK characters no longer count as keywords (`草` would LIKE-match 草莓 / 草稿 / 草原). Exemption: `mem.db.keyword_single_char_allow = {"凤"}` for single-character proper names.
+
+### Benchmark-Driven Retrieval Fixes (v1.21)
+- First public-benchmark number: `benchmarks/longmemeval/` runs the retrieval half of LongMemEval-S (500 questions, zero-model, session-level recall) and an ablation. v1.20 scored 70.2 % R@5-all against an 86.6 % embedder ceiling; the gap was two pieces.
+- Same-day cap counts (day, `entity`) — unrelated conversations stored on one day no longer share a quota; rows without an entity keep per-day behaviour.
+- Keyword lane scores by matched tokens (`0.65 − 0.45·matched/total`), needs two content tokens (or the only one), and the tokenizer drops function words (`db.keyword_stopwords`).
+- [中文说明](docs/release-notes/v1.21.0_zh.md) · [English release notes](docs/release-notes/v1.21.0.md).
 
 ### Raw Transcripts, Injected-Layer Size, Dream-Time Evidence Check (v1.20)
 
@@ -532,7 +540,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.20.0](docs/release-notes/v1.20.0_zh.md) · [English](docs/release-notes/v1.20.0.md) — raw transcripts as a searchable layer, injected-layer size readout, dream-time evidence check. Previous: [v1.19.0](docs/release-notes/v1.19.0_zh.md) · [English](docs/release-notes/v1.19.0.md)
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.21.0](docs/release-notes/v1.21.0_zh.md) · [English](docs/release-notes/v1.21.0.md) — benchmark-driven retrieval fixes (same-day cap per conversation, keyword lane scoring). Previous: [v1.20.0](docs/release-notes/v1.20.0_zh.md) · [English](docs/release-notes/v1.20.0.md)
 
 ## Origin
 

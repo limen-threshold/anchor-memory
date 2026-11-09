@@ -10,6 +10,25 @@ import os
 from datetime import datetime, timedelta
 
 
+# v1.21: tokens the keyword lane ignores (English + Chinese function words, the
+# question scaffolding of a chat message). Not exhaustive on purpose — it only has
+# to stop the words that appear in nearly every message and therefore match
+# nearly every memory. Per-instance override: ``db.keyword_stopwords = {...}``.
+DEFAULT_KEYWORD_STOPWORDS = frozenset("""
+a an the i me my we our you your he him his she her it its they them their this that these those
+what which who whom when where why how is are was were be been being am do does did done have has had
+will would shall should can could may might must of in on at to for from by with about as into like
+through after before between during without within along across over under again further then once
+here there all any both each few more most other some such no nor not only own same so than too very
+just also still even much many well way thing things something anything nothing one two first last
+remember recall mention mentioned told tell said say ask asked earlier before previously conversation
+我 你 他 她 它 我们 你们 他们 她们 的 了 是 在 有 和 与 跟 也 都 就 还 又 很 太 不 没 没有 吗 呢 吧 啊 哦 嗯
+什么 怎么 怎样 为什么 哪 哪里 哪个 谁 几 多少 这 那 这个 那个 这些 那些 这样 那样 这里 那里 一个 一下 一点
+可以 能 会 要 想 觉得 知道 记得 记不记得 还记得 说 说过 告诉 问 提到 之前 以前 刚才 现在 今天 昨天 明天 时候
+因为 所以 但是 不过 如果 虽然 然后 而且 或者 还是 就是 不是 已经 一直 一起 自己 东西 事情 问题 感觉 应该 可能 真的 其实
+""".split())
+
+
 class AnchorDB:
     """SQLite storage with graph layer for memory synapses."""
 
@@ -370,6 +389,13 @@ class AnchorDB:
             if not t:
                 continue
             if not re.search(r'\w|[一-鿿]', t):
+                continue
+            # v1.21: function words never qualify. "what did I say about X" used to
+            # produce ["what", "did", "say", "about", "X"] and LIKE-match the whole
+            # store on "what"/"did" — the keyword lane then returned the first N rows
+            # in insertion order with a flat score. Override/extend via
+            # ``keyword_stopwords`` on the instance.
+            if t.lower() in getattr(self, "keyword_stopwords", DEFAULT_KEYWORD_STOPWORDS):
                 continue
             if len(t) >= 2 or t in self.keyword_single_char_allow:
                 keywords.append(t)

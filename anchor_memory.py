@@ -426,7 +426,15 @@ class AnchorMemory:
                 continue
             if len(out) >= n_results:
                 break
+            # v1.21: the cap counts (day, entity) rather than day alone. The cap
+            # exists because five memories written one afternoon are usually one
+            # event; but when a store carries several unrelated conversations per
+            # day (``entity`` set at store time — a session id, a penpal pair, …),
+            # they should not share one quota. Rows without an entity keep the
+            # per-day behaviour.
             day = str(c.get("timestamp") or "")[:10]
+            if day and c.get("entity"):
+                day = f"{day}|{c['entity']}"
             ledger = lane_day_counts if c.get("_debug_source") == "keyword" else day_counts
             if day and ledger.get(day, 0) >= cap:
                 continue
@@ -547,6 +555,7 @@ class AnchorMemory:
                 "memory_id": mid,
                 "timestamp": ts,
                 "tag": meta.get("tag", "general"),
+                "entity": meta.get("entity"),   # v1.21: slot allocation keys the same-day cap on (day, entity)
                 "snippet": doc,
                 "score": dist - boost,
                 "_debug_raw_distance": dist,
@@ -710,19 +719,55 @@ class AnchorMemory:
         return ranked
 
     def _keyword_fallback(self, query: str, n_results: int = 5, tag: str = None) -> list:
-        """SQLite LIKE fallback for cross-language embedding misses."""
-        results = self.db.keyword_search(query, limit=n_results, tag=tag)
-        return [{
-            "memory_id": r["memory_id"],
-            "timestamp": r.get("timestamp", ""),
-            "tag": r.get("tag", "general"),
-            "snippet": r.get("text", ""),
-            "score": 0.6,  # Fixed score for keyword matches
-            "_debug_raw_distance": None,
-            "_debug_citation_boost": 0.0,
-            "_debug_emotion_boost": 0.0,
-            "_debug_source": "keyword",
-        } for r in results]
+        """SQLite LIKE lane for cross-language embedding misses.
+
+        v1.21: scored by how many query tokens a row actually contains, instead
+        of a flat 0.6 for anything that LIKE-matched any token. The flat score
+        plus ``LIMIT n`` meant that a question with one common token returned
+        the first N rows of the table in insertion order, each scoring 0.6 —
+        which outranks every vector hit with cosine distance above 0.6 (on the
+        LongMemEval benchmark that lane alone cost ~10 points of session recall).
+        Now: pull a wide pool, keep rows matching at least two tokens (or the
+        only token), score ``0.65 - 0.45 * matched/total`` so a full literal
+        match (0.20) beats good vector hits and a lone weak match (~0.5+) does
+        not. Function words are dropped by the tokenizer (``keyword_stopwords``).
+        """
+        tokens = self.db._tokenize_query(query)
+        if not tokens:
+            return []
+        pool = self.db.keyword_search(query, limit=max(n_results * 8, 300), tag=tag)
+        need = 1 if len(tokens) == 1 else 2
+        out = []
+        for r in pool:
+            text = (r.get("text") or "").lower()
+            matched = sum(1 for t in tokens if t.lower() in text)
+            if matched < need:
+                continue
+            out.append({
+                "memory_id": r["memory_id"],
+                "timestamp": r.get("timestamp", ""),
+                "tag": r.get("tag", "general"),
+                "entity": None,
+                "snippet": r.get("text", ""),
+                "score": 0.65 - 0.45 * (matched / len(tokens)),
+                "_debug_raw_distance": None,
+                "_debug_citation_boost": 0.0,
+                "_debug_emotion_boost": 0.0,
+                "_debug_source": "keyword",
+                "_debug_keyword_matches": matched,
+            })
+        out.sort(key=lambda m: m["score"])
+        out = out[:n_results * 3]
+        # entity lives in the vector store's metadata (no SQLite column); fetch it
+        # for the kept rows so the (day, entity) cap can see keyword hits too.
+        try:
+            got = self._collection.get(ids=[m["memory_id"] for m in out], include=["metadatas"])
+            ent = {i: (md or {}).get("entity") for i, md in zip(got.get("ids", []), got.get("metadatas", []))}
+            for m in out:
+                m["entity"] = ent.get(m["memory_id"])
+        except Exception:
+            pass
+        return out
 
     def consolidate(self, conversation_text: str, top_n: int = 10) -> dict:
         """Passive Hebbian update — match conversation text against memory store,
