@@ -133,3 +133,5 @@ the boosts are innocent.
 - `runs_v121/` — v1.21 summary (2026-11-09 noon); same.
 - v1.22 changed nothing this benchmark can see: every haystack turn carries a 2023 timestamp, so the old-memory floor never fires here and short-tier deletion is not part of the protocol. A 40-question sanity run matched v1.21 question for question.
 - `runs_v122/` — v1.22 run with two single-switch lanes (`anchor_no_cap`, `anchor_no_kw`) and per-question candidate dumps; `fusion_eval.py` replays slot/fusion rules on those dumps (reproduces the shipped lane 500/500). Findings: cap off = no change; keyword lane off = bare embedder exactly (433); keyword base 0.95 (shipped in v1.23) = 436, ≥ bare in every class. Table in `docs/release-notes/v1.23.0.md`.
+- `runs_v124/` — v1.23 default re-run plus `anchor_rerank` (top-60 re-sorted by an external cross-encoder via `--rerank`): default 436 (matches the offline replay), rerank 455; temporal 98 → 114. Table in `docs/release-notes/v1.24.0.md`.
+- `embedder_compare.py` — paired bare-embedder comparison against the shipped MiniLM on the same question ids (`--bare-only --model … --query-prefix …` runs).

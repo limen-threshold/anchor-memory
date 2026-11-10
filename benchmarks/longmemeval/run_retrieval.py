@@ -49,7 +49,11 @@ sys.path.insert(0, ROOT)
 
 DATA_DEFAULT = os.path.join(HERE, "data", "longmemeval_s_cleaned.json")
 KS = (5, 10)
-LANES = ("anchor_default", "anchor_no_cap", "anchor_no_kw", "anchor_plain", "vector_only", "transcript_kw")
+LANES = ("anchor_default", "anchor_no_cap", "anchor_no_kw", "anchor_rerank", "anchor_plain", "vector_only", "transcript_kw")
+RERANKER = None   # set by --rerank: callable(query, texts) -> scores
+BARE_ONLY = False   # --bare-only: store + raw vector lane only (embedder measurement), near-dup merge off
+QUERY_PREFIX = ""   # --query-prefix / --doc-prefix: instruction prefixes some embedders need (e5, Qwen3-Embedding)
+DOC_PREFIX = ""
 
 _STOP = set("""a an the i me my we our you your he she it they them his her their this that these those what which who whom
 when where why how is are was were be been being do does did have has had will would shall should can could may might must
@@ -95,6 +99,8 @@ def build_and_query(q: dict, embedder, tmp_root: str, n_turns: int = 60) -> dict
     try:
         anchor_memory.SentenceTransformer = lambda name: embedder  # share one loaded model
         mem = anchor_memory.AnchorMemory(db_dir)
+        if BARE_ONLY:
+            mem.near_dup_merge_sim = 2.0   # never merge: a different embedder would need the threshold re-calibrated
         sids = eval(q["haystack_session_ids"]) if isinstance(q["haystack_session_ids"], str) else q["haystack_session_ids"]
         dates = eval(q["haystack_dates"]) if isinstance(q["haystack_dates"], str) else q["haystack_dates"]
         n_stored = n_merged = 0
@@ -109,7 +115,7 @@ def build_and_query(q: dict, embedder, tmp_root: str, n_turns: int = 60) -> dict
                         continue
                     ts = (base + timedelta(seconds=30 * i)).isoformat()
                     mid = f"{sid}|{i}"
-                    got = mem.store(mid, text, tag=turn.get("role", "user"), tier="long",
+                    got = mem.store(mid, (DOC_PREFIX + text) if DOC_PREFIX else text, tag=turn.get("role", "user"), tier="long",
                                     entity=sid, timestamp=ts)
                     n_stored += 1
                     if got != mid:
@@ -119,6 +125,16 @@ def build_and_query(q: dict, embedder, tmp_root: str, n_turns: int = 60) -> dict
         question = q["question"]
         lanes = {}
         t0 = time.time()
+        if BARE_ONLY:
+            emb = embedder.encode(QUERY_PREFIX + question).tolist()
+            raw = mem._collection.query(query_embeddings=[emb], n_results=min(n_turns, mem._collection.count()), include=["metadatas"])
+            lanes = {k: [] for k in LANES}
+            lanes["vector_only"] = _sessions_in_order([m["memory_id"] for m in raw["metadatas"][0]])
+            t_query = time.time() - t0
+            return {"question_id": q["question_id"], "question_type": q["question_type"], "question": question,
+                    "evidence": eval(q["answer_session_ids"]) if isinstance(q["answer_session_ids"], str) else q["answer_session_ids"],
+                    "n_sessions": len(sids), "n_turns": n_stored, "n_near_dup_merged": n_merged,
+                    "t_store_s": round(t_store, 1), "t_query_s": round(t_query, 2), "kw_terms": [], "lanes": {k: v[:20] for k, v in lanes.items()}, "candidates": []}
         # Lane 1: as shipped (v1.22 run also keeps the pre-allocation candidate pool for offline replay)
         mem.capture_candidates = True
         res = mem.search(question, n_results=n_turns, hebbian=False, no_cite=True)
@@ -138,6 +154,14 @@ def build_and_query(q: dict, embedder, tmp_root: str, n_turns: int = 60) -> dict
         res = mem.search(question, n_results=n_turns, hebbian=False, no_cite=True)
         lanes["anchor_no_kw"] = _sessions_in_order([r["memory_id"] for r in res])
         mem.keyword_lane = True
+        # Lane 1c (v1.24, optional): same candidates, top-60 re-sorted by an external cross-encoder
+        if RERANKER is not None:
+            mem.reranker = RERANKER; mem.rerank_pool = n_turns
+            res = mem.search(question, n_results=n_turns, hebbian=False, no_cite=True)
+            lanes["anchor_rerank"] = _sessions_in_order([r["memory_id"] for r in res])
+            mem.reranker = None
+        else:
+            lanes["anchor_rerank"] = []
         # Lane 2: plain top-N (no same-day cap, no recency boost)
         mem.same_day_cap = 0
         mem.recency_weight = 0.0
@@ -200,7 +224,19 @@ def main():
     ap.add_argument("--tmp", default=os.path.join(HERE, "tmp"))
     ap.add_argument("--model", default="paraphrase-multilingual-MiniLM-L12-v2", help="Anchor's default embedder")
     ap.add_argument("--summarize", nargs="*", help="result files to summarize (no run)")
+    ap.add_argument("--bare-only", action="store_true", help="embedder measurement: store + raw vector lane only, near-dup merge off")
+    ap.add_argument("--query-prefix", default="", help="prefix prepended to the question before embedding (e5: 'query: '; Qwen3-Embedding: instruction)")
+    ap.add_argument("--doc-prefix", default="", help="prefix prepended to every stored turn (e5: 'passage: ')")
+    ap.add_argument("--rerank", default="", help="python path of a reranker module exposing get().score(pairs) (e.g. the upstream rerank_local)")
     args = ap.parse_args()
+    global RERANKER, BARE_ONLY, QUERY_PREFIX, DOC_PREFIX
+    BARE_ONLY = args.bare_only; QUERY_PREFIX = args.query_prefix; DOC_PREFIX = args.doc_prefix
+    if args.rerank:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location("ext_rerank", args.rerank); _mod = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_mod)
+        _rr = _mod.get(); assert _rr is not None, "reranker model not available"
+        RERANKER = lambda q, texts: _rr.score([(q[:400], t[:800]) for t in texts])
+        print(f"[lme] reranker on: {args.rerank}", flush=True)
 
     if args.summarize is not None:
         files = args.summarize or [args.out]

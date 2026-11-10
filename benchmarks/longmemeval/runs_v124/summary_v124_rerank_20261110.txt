@@ -1,0 +1,71 @@
+questions: 500   turns stored: 246,738   near-dup merged: 3,661   store time: 2.24 h   median query time: 0.91 s
+
+== all question types
+lane              R@5 any  R@5 all R@10 any R@10 all
+anchor_default       97.0     87.2     99.0     95.0
+anchor_no_cap        97.0     87.2     99.0     95.0
+anchor_no_kw         97.0     86.6     98.8     94.4
+anchor_rerank        97.8     91.0     99.2     96.2
+anchor_plain         97.0     87.2     99.0     95.0
+vector_only          97.0     86.6     99.0     94.8
+transcript_kw        30.4     20.8     30.4     21.0
+
+== knowledge-update (n=78)
+lane              R@5 any  R@5 all R@10 any R@10 all
+anchor_default      100.0    100.0    100.0    100.0
+anchor_no_cap       100.0    100.0    100.0    100.0
+anchor_no_kw        100.0     97.4    100.0     98.7
+anchor_rerank       100.0     98.7    100.0    100.0
+anchor_plain        100.0    100.0    100.0    100.0
+vector_only         100.0     97.4    100.0     98.7
+transcript_kw        53.8     33.3     53.8     33.3
+
+== multi-session (n=133)
+lane              R@5 any  R@5 all R@10 any R@10 all
+anchor_default       97.7     81.2    100.0     94.0
+anchor_no_cap        97.7     81.2    100.0     94.0
+anchor_no_kw         97.7     80.5    100.0     94.0
+anchor_rerank        98.5     82.7    100.0     94.0
+anchor_plain         97.7     81.2    100.0     94.0
+vector_only          97.7     80.5    100.0     94.7
+transcript_kw        21.1      7.5     21.1      8.3
+
+== single-session-assistant (n=56)
+lane              R@5 any  R@5 all R@10 any R@10 all
+anchor_default      100.0    100.0    100.0    100.0
+anchor_no_cap       100.0    100.0    100.0    100.0
+anchor_no_kw        100.0    100.0    100.0    100.0
+anchor_rerank       100.0    100.0    100.0    100.0
+anchor_plain        100.0    100.0    100.0    100.0
+vector_only         100.0    100.0    100.0    100.0
+transcript_kw        30.4     30.4     30.4     30.4
+
+== single-session-preference (n=30)
+lane              R@5 any  R@5 all R@10 any R@10 all
+anchor_default       90.0     90.0     96.7     96.7
+anchor_no_cap        90.0     90.0     96.7     96.7
+anchor_no_kw         90.0     90.0     96.7     96.7
+anchor_rerank        93.3     93.3    100.0    100.0
+anchor_plain         90.0     90.0     96.7     96.7
+vector_only          90.0     90.0     96.7     96.7
+transcript_kw         3.3      3.3      3.3      3.3
+
+== single-session-user (n=70)
+lane              R@5 any  R@5 all R@10 any R@10 all
+anchor_default       98.6     98.6    100.0    100.0
+anchor_no_cap        98.6     98.6    100.0    100.0
+anchor_no_kw         98.6     98.6    100.0    100.0
+anchor_rerank       100.0    100.0    100.0    100.0
+anchor_plain         98.6     98.6    100.0    100.0
+vector_only          98.6     98.6    100.0    100.0
+transcript_kw        52.9     52.9     52.9     52.9
+
+== temporal-reasoning (n=133)
+lane              R@5 any  R@5 all R@10 any R@10 all
+anchor_default       94.0     73.7     97.0     88.0
+anchor_no_cap        94.0     73.7     97.0     88.0
+anchor_no_kw         94.0     73.7     96.2     86.5
+anchor_rerank        94.7     85.7     97.0     91.7
+anchor_plain         94.0     73.7     97.0     88.0
+vector_only          94.0     73.7     97.0     87.2
+transcript_kw        20.3      9.8     20.3      9.8

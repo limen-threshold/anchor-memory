@@ -121,7 +121,7 @@ def main(files):
     rows = sorted(rows, key=lambda r: r["question_id"])
     alloc = allocator()
     types = sorted({r["question_type"] for r in rows})
-    per = {name: defaultdict(int) for name in list(RULES) + ["vector_only", "anchor_default", "anchor_no_cap", "anchor_no_kw"]}
+    per = {name: defaultdict(int) for name in list(RULES) + ["vector_only", "anchor_default", "anchor_no_cap", "anchor_no_kw", "anchor_rerank"]}
     n_type = defaultdict(int)
     fidelity = 0; unreachable = defaultdict(int); unreachable_vec_hit = defaultdict(int)
     flips = {name: [] for name in RULES}
@@ -134,8 +134,9 @@ def main(files):
             unreachable[t] += 1
             if hit(r["lanes"]["vector_only"], ev):
                 unreachable_vec_hit[t] += 1
-        for lane in ("vector_only", "anchor_default", "anchor_no_cap", "anchor_no_kw"):
-            per[lane][t] += hit(r["lanes"][lane], ev)
+        for lane in ("vector_only", "anchor_default", "anchor_no_cap", "anchor_no_kw", "anchor_rerank"):
+            if r["lanes"].get(lane):
+                per[lane][t] += hit(r["lanes"][lane], ev)
         base_hit = hit(r["lanes"]["anchor_default"], ev)
         for name, fn in RULES.items():
             s = sessions(fn(c, alloc))
@@ -152,7 +153,7 @@ def main(files):
     hdr = f"{'rule':16s}" + "".join(f" {t[:14]:>14s}" for t in types) + f" {'TOTAL':>6s}  {'vs bare':>8s}"
     print(hdr)
     bare = per["vector_only"]
-    for name in ["vector_only", "anchor_default", "anchor_no_cap", "anchor_no_kw"] + list(RULES):
+    for name in ["vector_only", "anchor_default", "anchor_no_cap", "anchor_no_kw", "anchor_rerank"] + list(RULES):
         d = per[name]; tot = sum(d.values())
         ok_all = all(d[t] >= bare[t] - (1 if n_type[t] <= SMALL else 0) for t in types) and tot >= sum(bare.values())
         print(f"{name:16s}" + "".join(f" {d[t]:>7d}/{n_type[t]:<6d}" for t in types) + f" {tot:>6d}  {'PASS' if ok_all else '':>8s}")

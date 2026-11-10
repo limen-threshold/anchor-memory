@@ -203,6 +203,12 @@ class AnchorMemory:
         self.keyword_score_base = 0.95
         self.capture_candidates = False
         self._last_candidates = None
+        # v1.24 — optional reranker hook (off unless set). reranker(query, [text, …]) → [score, …]
+        # (higher = more relevant). After slot allocation the top `rerank_pool` rows are re-sorted
+        # by that score and cut to n_results. It only re-orders rows Anchor already chose: no
+        # threshold, no filtering, nothing new enters. None = zero-model search as before.
+        self.reranker = None
+        self.rerank_pool = 30
         # v1.14 — store-side near-duplicate gate. On store(), if an existing
         # memory's cosine similarity to the new text is >= this, the new text is
         # NOT stored: the existing one is cited instead (usage_count+1) and its
@@ -635,7 +641,18 @@ class AnchorMemory:
         memories = []
         if self.capture_candidates:
             self._last_candidates = [dict(c) for c in candidates]
-        for c in self._allocate_slots(candidates, n_results, exclude_tags):
+        chosen = self._allocate_slots(candidates, max(n_results, self.rerank_pool) if self.reranker else n_results, exclude_tags)
+        if self.reranker and chosen:
+            try:
+                _rs = self.reranker(query, [str(c.get('snippet') or '') for c in chosen])
+                if _rs and len(_rs) == len(chosen):
+                    for c, s_ in zip(chosen, _rs):
+                        c['_debug_rerank'] = s_
+                    chosen = sorted(chosen, key=lambda c: -(c.get('_debug_rerank') or 0.0))
+            except Exception as _re:   # a broken reranker must not break search
+                print(f'[AnchorMemory] reranker failed (non-fatal): {type(_re).__name__}: {_re}')
+            chosen = chosen[:n_results]
+        for c in chosen:
             if not no_cite:
                 self.db.cite(c["memory_id"])
             if include_context:

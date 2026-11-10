@@ -1,0 +1,9 @@
+questions 500; replay_default reproduces anchor_default lane list: 500/500
+unreachable (no evidence session in the candidate pool at all) by type: knowledge-update 0/78 (vector_only still hit 0), multi-session 4/133 (vector_only still hit 0), single-session-assistant 0/56 (vector_only still hit 0), single-session-preference 0/30 (vector_only still hit 0), single-session-user 0/70 (vector_only still hit 0), temporal-reasoning 4/133 (vector_only still hit 0)
+rule             knowledge-upda  multi-session single-session single-session single-session temporal-reaso  TOTAL   vs bare
+vector_only           76/78         107/133         56/56          27/30          69/70          98/133       433      PASS
+anchor_default        78/78         108/133         56/56          27/30          69/70          98/133       436      PASS
+anchor_no_cap         78/78         108/133         56/56          27/30          69/70          98/133       436      PASS
+anchor_no_kw          76/78         107/133         56/56          27/30          69/70          98/133       433      PASS
+anchor_rerank         77/78         110/133         56/56          28/30          70/70         114/133       455      PASS
+replay_default        78/78         108/133         56/56          27/30          69/70          98/133       436      PASS
