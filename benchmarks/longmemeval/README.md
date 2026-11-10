@@ -126,3 +126,9 @@ the boosts are innocent.
   (cap off) the top-5 were literally sessions 1–5 of the haystack on the smoke question.
   This is a defect worth fixing (stopword filter, or score keyword hits by how many
   query tokens they match instead of a constant).
+
+## Runs
+
+- `runs_v120/` — v1.20 summary (2026-11-09 morning); per-question files are kept locally only.
+- `runs_v121/` — v1.21 summary (2026-11-09 noon); same.
+- v1.22 changed nothing this benchmark can see: every haystack turn carries a 2023 timestamp, so the old-memory floor never fires here and short-tier deletion is not part of the protocol. A 40-question sanity run matched v1.21 question for question.

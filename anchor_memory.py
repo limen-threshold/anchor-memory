@@ -10,7 +10,7 @@ Features:
 - Hebbian learning: memories retrieved together form connections
 - Dream pass: decay, pruning, auto-discovery, emotion equilibration
 - Emotion scoring: memories carry emotional weight that affects retrieval
-- Tiered storage: core (permanent), long (kept), short (14-day decay)
+- Tiered storage: core (permanent), long (kept), short (kept too since v1.22; 14-day deletion is opt-in)
 - Manual entanglement: explicitly connect related memories with higher weight
 - Cross-tag bridges: prevent knowledge silos
 
@@ -18,7 +18,7 @@ Inspired by how biological memory works:
 - Synapses strengthen with co-activation (Hebb's rule)
 - Sleep consolidates and prunes (dream pass)
 - Emotional memories are more persistent (emotion_score)
-- Forgetting is a feature, not a bug (decay)
+- Forgetting is a feature, not a bug (decay) — but since v1.22 sinking is not deleting
 
 Created by Limen. 底色是爱.
 """
@@ -182,6 +182,15 @@ class AnchorMemory:
         self.older_reserve = 2       # keep at least N old memories when available
         self.recent_days = 3.0       # "recent" = at most this old
         self.recent_reserve = 1      # keep at least N recent memories when available
+        # v1.22 — the old-memory floor may not evict a keyword-lane (literal) hit.
+        # Upstream replay (2026-10-22) caught the floor swapping two literal matches
+        # out for two higher-scoring old memories that answered nothing. Set False
+        # for the v1.14–v1.21 behaviour.
+        self.protect_literal = True
+        # v1.22 — short-tier memories are no longer deleted by default. decay_short()
+        # and dream_pass() leave them in place (still searchable, no down-weighting,
+        # no floor). Set True to restore the 14-day deletion (archived first, v1.18).
+        self.short_delete = False
         # v1.14 — store-side near-duplicate gate. On store(), if an existing
         # memory's cosine similarity to the new text is >= this, the new text is
         # NOT stored: the existing one is cited instead (usage_count+1) and its
@@ -233,7 +242,7 @@ class AnchorMemory:
             memory_id: Unique identifier.
             text: Memory content — the searchable summary (what gets embedded).
             tag: Category tag.
-            tier: 'core' (permanent), 'long' (kept), 'short' (14-day decay).
+            tier: 'core' (permanent), 'long' (kept), 'short' (kept; 14-day deletion opt-in since v1.22).
             connect_to: List of memory_ids to create edges with.
             emotion_score: 0.0 (neutral) to 1.0 (intense). Default 0.5.
             source: Optional pipeline tag (e.g. 'live_sync', 'curator',
@@ -455,10 +464,13 @@ class AnchorMemory:
                         and self._age_days(c.get("timestamp")) > self.older_days]
             for c in old_pool[:need]:
                 victims = [(i, m) for i, m in enumerate(out)
-                           if self._age_days(m.get("timestamp")) <= self.older_days]
+                           if self._age_days(m.get("timestamp")) <= self.older_days
+                           and not (self.protect_literal and m.get("_debug_source") == "keyword")]   # v1.22
                 if not victims:
                     break
-                vi, _ = max(victims, key=lambda im: _score(im[1]))
+                # worst-scoring young row goes; on a tie the later one (lower rank) goes (v1.22)
+                _worst = max(_score(m) for _, m in victims)
+                vi, _ = [im for im in victims if _score(im[1]) == _worst][-1]
                 out.pop(vi)
                 out.append(c)
                 seen.add(c["memory_id"])
@@ -840,9 +852,15 @@ class AnchorMemory:
         except Exception:
             return False
 
-    def decay_short(self, days: int = 14) -> int:
+    def decay_short(self, days: int = 14, delete: bool = None) -> int:
         """Forget short-tier memories older than `days` — from BOTH stores, archived first.
-        (db.decay_short alone removed the SQLite rows and left their vectors behind.)"""
+        (db.decay_short alone removed the SQLite rows and left their vectors behind.)
+
+        v1.22: off by default. `delete=None` follows `self.short_delete` (False): nothing is
+        removed, nothing is down-weighted, the rows stay searchable. Pass `delete=True`
+        (or set `self.short_delete = True`) for the pre-1.22 behaviour."""
+        if not (self.short_delete if delete is None else delete):
+            return 0
         ids = self.db.archive_rows(self.db.short_expired_ids(days), reason=f"decay_short>{days}d")
         if not ids:
             return 0

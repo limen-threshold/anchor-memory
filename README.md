@@ -38,13 +38,15 @@ Memories don't just get stored and retrieved. They **associate**.
 
 ### Dream Pass
 Run periodically (like sleep for the brain):
-- **Decay**: Short-tier memories older than 14 days are deleted.
+- **Decay**: off by default since v1.22 — short-tier rows sink (their recency boost fades) but stay. `mem.short_delete = True` restores the 14-day deletion (archived first).
 - **Pruning**: Weak edges decay by 0.9x per pass. Edges below 0.1 are deleted.
 - **Strong edge decay**: Manual connections decay at 0.95x — they fade if not reinforced by Hebbian co-activation.
 - **Auto-discovery**: Randomly samples memories and connects semantically similar but unlinked ones.
 - **Emotion equilibration**: Connected memories nudge each other's emotion scores toward equilibrium.
 
 **The dream pass never rewrites what a memory says (v1.18).** Through v1.17 it also asked an LLM to split "bundled" memories on every run and deleted the originals; that is now opt-in and non-lossy — `dream_pass(split=True)`, see `split_bundled()` — and `dream_extras.run_global_dedup` folds duplicates together without replacing the survivor's wording. If you ran either with an LLM configured, read [v1.18 release notes](docs/release-notes/v1.18.0.md).
+
+**Nothing is deleted at all unless you ask (v1.22).** `dream_pass()` no longer removes expired `short` rows; they stay searchable and simply sink as their recency boost fades. The old-memory floor in `search()` also stopped evicting keyword-lane (literal) hits — `protect_literal`, see [v1.22 release notes](docs/release-notes/v1.22.0.md).
 
 **Nothing is deleted without a copy (v1.18).** Every row removed by `delete`, a merge, a split, or short-tier decay is first appended verbatim to `deleted_memories.jsonl` next to `memories.db`. If that write fails, the delete doesn't happen. Recall never reads the file; it exists so that forgetting is recoverable.
 
@@ -61,7 +63,7 @@ Run periodically (like sleep for the brain):
 ### Tiered Storage
 - `core` — permanent, never decays
 - `long` — kept indefinitely, but dream pass can upgrade/downgrade
-- `short` — decays after 14 days if not promoted (archived to `deleted_memories.jsonl` first, v1.18)
+- `short` — kept too since v1.22 (sinking is not deleting). Opt-in: `mem.short_delete = True` deletes rows older than 14 days, archived to `deleted_memories.jsonl` first (v1.18)
 
 ### Manual Entanglement
 - Explicitly connect related memories with higher weight (2.0+).

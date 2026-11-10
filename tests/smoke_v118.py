@@ -64,6 +64,7 @@ mem.store("s_old", "Bought oat milk and rye bread on the way home.", tag="daily"
 mem.store("s_new", "Watered the basil on the balcony this morning.", tag="daily", tier="short")
 mem.store("l_old", "First trip to Lisbon: tram 28, custard tarts, rain.", tag="travel", tier="long", timestamp=OLD)
 spy = StubLLM(lambda s, u: "[]")
+mem.short_delete = True   # v1.22: deletion is opt-in; this smoke tests the opt-in path
 stats = mem.dream_pass(auto_discover=False, llm=spy)
 check(stats["decayed_memories"] == 1, f"one expired short-tier row decayed ({stats['decayed_memories']})")
 check(mem.db.get("s_old") is None and mem.db.get("s_new") and mem.db.get("l_old"), "only the expired short row went")

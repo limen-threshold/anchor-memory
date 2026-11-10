@@ -115,7 +115,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                     "tier": {
                         "type": "string",
                         "enum": ["core", "long", "short"],
-                        "description": "core = permanent. long = kept indefinitely. short = decays after 14 days.",
+                        "description": "core = permanent. long = kept indefinitely. short = kept too (since v1.22 nothing is auto-deleted; short_delete=True restores the 14-day decay).",
                         "default": "long"
                     },
                     "emotion_score": {
@@ -824,7 +824,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.20.0"
+SERVER_VERSION = "1.22.0"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).
