@@ -37,7 +37,7 @@ try:
     kw = mem._keyword_fallback("What degree did I graduate with?", n_results=5)
     ok("keyword lane returns only rows matching >=2 tokens (no flood)", all(r["_debug_keyword_matches"] >= 2 for r in kw))
     ok("keyword lane best row is the graduation memory", kw and kw[0]["memory_id"] == "s1|0")
-    ok("keyword lane scores are not flat", len({round(r["score"], 3) for r in kw}) >= 1 and all(r["score"] < 0.6 for r in kw))
+    ok("keyword lane scores are not flat", len({round(r["score"], 3) for r in kw}) >= 1 and all(r["score"] < mem.keyword_score_base for r in kw))
 
     # ③ same-day cap keyed on (day, entity): 5 unrelated sessions on one day can all surface
     res = mem.search("degree graduate business administration diploma", n_results=5, hebbian=False, no_cite=True)

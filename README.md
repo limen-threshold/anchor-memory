@@ -176,7 +176,8 @@ All knobs live on the `AnchorMemory` instance; `same_day_cap = 0` restores plain
 ### Benchmark-Driven Retrieval Fixes (v1.21)
 - First public-benchmark number: `benchmarks/longmemeval/` runs the retrieval half of LongMemEval-S (500 questions, zero-model, session-level recall) and an ablation. v1.20 scored 70.2 % R@5-all against an 86.6 % embedder ceiling; the gap was two pieces.
 - Same-day cap counts (day, `entity`) — unrelated conversations stored on one day no longer share a quota; rows without an entity keep per-day behaviour.
-- Keyword lane scores by matched tokens (`0.65 − 0.45·matched/total`), needs two content tokens (or the only one), and the tokenizer drops function words (`db.keyword_stopwords`).
+- Keyword lane scores by matched tokens (`keyword_score_base − 0.45·matched/total`; base 0.95 since v1.23, 0.65 in v1.21–v1.22), needs two content tokens (or the only one), and the tokenizer drops function words (`db.keyword_stopwords`).
+- **v1.23**: with base 0.95 a full literal match ranks like a vector hit at distance 0.50 — behind strong semantic hits, ahead of weak ones. On LongMemEval-S that took the default lane from 403/500 to 436/500 against the bare embedder's 433; the same-day cap was measured as inert and left as is. Details and the per-class table: [v1.23 release notes](docs/release-notes/v1.23.0.md).
 - [中文说明](docs/release-notes/v1.21.0_zh.md) · [English release notes](docs/release-notes/v1.21.0.md).
 
 ### Raw Transcripts, Injected-Layer Size, Dream-Time Evidence Check (v1.20)

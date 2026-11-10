@@ -191,6 +191,18 @@ class AnchorMemory:
         # and dream_pass() leave them in place (still searchable, no down-weighting,
         # no floor). Set True to restore the 14-day deletion (archived first, v1.18).
         self.short_delete = False
+        # v1.22 benchmark/diagnostic knobs: keyword_lane=False skips _keyword_fallback;
+        # capture_candidates=True keeps the pre-allocation candidate list on
+        # self._last_candidates (shallow copies) so slot rules can be replayed offline.
+        self.keyword_lane = True
+        # v1.23 — where the keyword lane sits against the vector lane. A keyword row scores
+        # keyword_score_base − 0.45·(matched/total): with 0.95 a full literal match lands at
+        # 0.50, i.e. behind strong vector hits and ahead of weak ones. v1.21 used 0.65 (full
+        # match 0.20 — ahead of every vector hit), which the LongMemEval-S replay showed costs
+        # 30 of 500 questions net. Any value in 0.90–1.25 scored the same there (plateau).
+        self.keyword_score_base = 0.95
+        self.capture_candidates = False
+        self._last_candidates = None
         # v1.14 — store-side near-duplicate gate. On store(), if an existing
         # memory's cosine similarity to the new text is >= this, the new text is
         # NOT stored: the existing one is cited instead (usage_count+1) and its
@@ -578,7 +590,7 @@ class AnchorMemory:
             })
 
         # Keyword fallback
-        keyword_results = self._keyword_fallback(query, n_results=n_results, tag=tag)
+        keyword_results = self._keyword_fallback(query, n_results=n_results, tag=tag) if self.keyword_lane else []
         candidates.extend(keyword_results)
 
         candidates.sort(key=lambda m: m["score"])
@@ -621,6 +633,8 @@ class AnchorMemory:
 
         # Slot allocation (v1.14), then cite/decorate the chosen set.
         memories = []
+        if self.capture_candidates:
+            self._last_candidates = [dict(c) for c in candidates]
         for c in self._allocate_slots(candidates, n_results, exclude_tags):
             if not no_cite:
                 self.db.cite(c["memory_id"])
@@ -740,8 +754,9 @@ class AnchorMemory:
         which outranks every vector hit with cosine distance above 0.6 (on the
         LongMemEval benchmark that lane alone cost ~10 points of session recall).
         Now: pull a wide pool, keep rows matching at least two tokens (or the
-        only token), score ``0.65 - 0.45 * matched/total`` so a full literal
-        match (0.20) beats good vector hits and a lone weak match (~0.5+) does
+        only token), score ``keyword_score_base - 0.45 * matched/total`` (base 0.95
+        since v1.23; 0.65 in v1.21) so a full literal match (0.50) sits behind strong
+        vector hits and ahead of weak ones, and a lone weak match (~0.8) does
         not. Function words are dropped by the tokenizer (``keyword_stopwords``).
         """
         tokens = self.db._tokenize_query(query)
@@ -761,7 +776,7 @@ class AnchorMemory:
                 "tag": r.get("tag", "general"),
                 "entity": None,
                 "snippet": r.get("text", ""),
-                "score": 0.65 - 0.45 * (matched / len(tokens)),
+                "score": self.keyword_score_base - 0.45 * (matched / len(tokens)),   # v1.23: base 0.95 (was 0.65)
                 "_debug_raw_distance": None,
                 "_debug_citation_boost": 0.0,
                 "_debug_emotion_boost": 0.0,

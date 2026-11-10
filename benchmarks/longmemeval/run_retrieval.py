@@ -49,7 +49,7 @@ sys.path.insert(0, ROOT)
 
 DATA_DEFAULT = os.path.join(HERE, "data", "longmemeval_s_cleaned.json")
 KS = (5, 10)
-LANES = ("anchor_default", "anchor_plain", "vector_only", "transcript_kw")
+LANES = ("anchor_default", "anchor_no_cap", "anchor_no_kw", "anchor_plain", "vector_only", "transcript_kw")
 
 _STOP = set("""a an the i me my we our you your he she it they them his her their this that these those what which who whom
 when where why how is are was were be been being do does did have has had will would shall should can could may might must
@@ -119,9 +119,25 @@ def build_and_query(q: dict, embedder, tmp_root: str, n_turns: int = 60) -> dict
         question = q["question"]
         lanes = {}
         t0 = time.time()
-        # Lane 1: as shipped
+        # Lane 1: as shipped (v1.22 run also keeps the pre-allocation candidate pool for offline replay)
+        mem.capture_candidates = True
         res = mem.search(question, n_results=n_turns, hebbian=False, no_cite=True)
         lanes["anchor_default"] = _sessions_in_order([r["memory_id"] for r in res])
+        cands = sorted(mem._last_candidates or [], key=lambda c: c.get("score") if c.get("score") is not None else 9.9)[:300]
+        cand_dump = [{"id": c["memory_id"], "ts": c.get("timestamp"), "ent": c.get("entity"), "s": round(c.get("score") or 0, 4),
+                      "src": c.get("_debug_source"), "d": None if c.get("_debug_raw_distance") is None else round(c["_debug_raw_distance"], 4),
+                      "km": c.get("_debug_keyword_matches")} for c in cands]
+        mem.capture_candidates = False
+        # Lane 1a (v1.22 step 3a): same-day cap off, everything else as shipped
+        mem.same_day_cap = 0
+        res = mem.search(question, n_results=n_turns, hebbian=False, no_cite=True)
+        lanes["anchor_no_cap"] = _sessions_in_order([r["memory_id"] for r in res])
+        mem.same_day_cap = 2
+        # Lane 1b (step 3b): keyword lane off, cap as shipped
+        mem.keyword_lane = False
+        res = mem.search(question, n_results=n_turns, hebbian=False, no_cite=True)
+        lanes["anchor_no_kw"] = _sessions_in_order([r["memory_id"] for r in res])
+        mem.keyword_lane = True
         # Lane 2: plain top-N (no same-day cap, no recency boost)
         mem.same_day_cap = 0
         mem.recency_weight = 0.0
@@ -141,7 +157,7 @@ def build_and_query(q: dict, embedder, tmp_root: str, n_turns: int = 60) -> dict
                 "evidence": eval(q["answer_session_ids"]) if isinstance(q["answer_session_ids"], str) else q["answer_session_ids"],
                 "n_sessions": len(sids), "n_turns": n_stored, "n_near_dup_merged": n_merged,
                 "t_store_s": round(t_store, 1), "t_query_s": round(t_query, 2),
-                "kw_terms": terms, "lanes": {k: v[:20] for k, v in lanes.items()}}
+                "kw_terms": terms, "lanes": {k: v[:20] for k, v in lanes.items()}, "candidates": cand_dump}
     finally:
         shutil.rmtree(db_dir, ignore_errors=True)
 
