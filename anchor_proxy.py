@@ -167,7 +167,7 @@ def build_time_block(state_dir: str, now: datetime = None) -> str:
     interval = ""
     try:
         if os.path.exists(ts_path):
-            with open(ts_path) as f:
+            with open(ts_path, "r", encoding="utf-8") as f:
                 last = datetime.fromisoformat(f.read().strip())
             secs = (now - last).total_seconds()
             if secs < 60:
@@ -182,7 +182,7 @@ def build_time_block(state_dir: str, now: datetime = None) -> str:
         pass
     try:
         os.makedirs(state_dir, exist_ok=True)
-        with open(ts_path, "w") as f:
+        with open(ts_path, "w", encoding="utf-8") as f:
             f.write(now.isoformat())
     except Exception:
         pass

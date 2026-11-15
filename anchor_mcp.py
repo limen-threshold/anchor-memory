@@ -824,7 +824,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.24.0"
+SERVER_VERSION = "1.25.0"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).
@@ -895,12 +895,23 @@ def run_stdio(db_path: str, pinned_dir: str = None):
         line = sys.stdin.readline()
         if not line:
             return None
-        return json.loads(line.strip())
+        if not line.strip():
+            return {}  # blank keep-alive line: ignore, keep serving
+        try:
+            return json.loads(line.strip())
+        except json.JSONDecodeError as e:
+            # v1.25: one malformed line used to take the whole server down. Answer with the
+            # JSON-RPC parse error and keep reading.
+            send({"jsonrpc": "2.0", "id": None,
+                  "error": {"code": -32700, "message": f"Parse error: {e}"}})
+            return {}
 
     while True:
         msg = read()
         if msg is None:
             break
+        if not msg:
+            continue
         resp = handle_message(msg, tools, handle_tool)
         if resp is not None:
             send(resp)

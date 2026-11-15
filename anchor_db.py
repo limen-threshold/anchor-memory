@@ -7,6 +7,7 @@ emotion scoring, citation tracking, and graph operations.
 
 import sqlite3
 import os
+import sys
 from datetime import datetime, timedelta
 
 
@@ -44,9 +45,17 @@ class AnchorDB:
         self._init_tables()
 
     def _conn(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # v1.25: the proxy and the MCP server are documented to share one store from two
+        # processes. WAL lets a reader proceed while the other writes; busy_timeout waits
+        # instead of raising "database is locked" on the first contention.
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA busy_timeout = 5000")
+        except sqlite3.DatabaseError:
+            pass
         return conn
 
     def _init_tables(self):
@@ -114,6 +123,10 @@ class AnchorDB:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_memory ON events(memory_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
+            # v1.25: wakeup / calendar reads / list_all walked the whole table.
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_tier_ts ON memories(tier, timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_pinned ON memories(pinned)")
             conn.commit()
         self._ensure_context_column()
         self._ensure_visual_column()
@@ -271,6 +284,13 @@ class AnchorDB:
         # (split pieces inherit their parent's time; imports keep their source time).
         # Only honoured on the first write — the UPSERT below never moves an existing one.
         now = timestamp or datetime.utcnow().isoformat()
+        if timestamp:
+            # v1.25: the store's time base is naive UTC. A caller-supplied "2026-11-14T18:00+08:00"
+            # or "...Z" is converted here once, instead of raising later inside the recency boost.
+            from anchor_guards import parse_ts_naive
+            _dt = parse_ts_naive(timestamp)
+            if _dt is not None:
+                now = _dt.isoformat()
         with self._conn() as conn:
             conn.execute(
                 """
@@ -325,7 +345,7 @@ class AnchorDB:
                         f.write(line + "\n")
                 safe.extend(mid for mid, _ in lines)
             except Exception as e:
-                print(f"[AnchorDB] delete archive write failed ({e}) — {len(lines)} rows NOT deleted")
+                print(f"[AnchorDB] delete archive write failed ({e}) — {len(lines)} rows NOT deleted", file=sys.stderr)
         return safe
 
     def delete(self, memory_id: str, reason: str = "deleted", archived: bool = False) -> bool:
@@ -435,19 +455,25 @@ class AnchorDB:
 
         like_clauses = " OR ".join(["text LIKE ?"] * len(keywords))
         like_params = [f"%{kw}%" for kw in keywords]
+        # v1.25: rank by matched-keyword count BEFORE the LIMIT. Without this the pool was the
+        # first `limit` rows in rowid order, and a store with >limit rows containing one common
+        # token silently dropped the rows that matched every token (outside review, 2026-11-14).
+        # No timestamp tie-break: the lane must not pre-decide recency (v1.10 lesson).
+        from anchor_guards import kw_order_by
+        order_by = kw_order_by(["text LIKE ?"] * len(keywords))
 
         with self._conn() as conn:
             if tag:
                 rows = conn.execute(
                     f"SELECT memory_id, text, timestamp, tag FROM memories "
-                    f"WHERE ({like_clauses}) AND tag = ? LIMIT ?",
-                    like_params + [tag, limit]
+                    f"WHERE ({like_clauses}) AND tag = ?{order_by} LIMIT ?",
+                    like_params + [tag] + like_params + [limit]
                 ).fetchall()
             else:
                 rows = conn.execute(
                     f"SELECT memory_id, text, timestamp, tag FROM memories "
-                    f"WHERE ({like_clauses}) LIMIT ?",
-                    like_params + [limit]
+                    f"WHERE ({like_clauses}){order_by} LIMIT ?",
+                    like_params + like_params + [limit]
                 ).fetchall()
             results = [dict(r) for r in rows]
             found_ids = {r["memory_id"] for r in results}

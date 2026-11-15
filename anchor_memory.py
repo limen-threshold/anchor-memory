@@ -27,6 +27,7 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
 import os
+import sys
 
 from anchor_db import AnchorDB
 
@@ -240,9 +241,9 @@ class AnchorMemory:
         Returns 0.0 on a missing/unparseable timestamp (never raises)."""
         if not timestamp or not self.recency_weight:
             return 0.0
-        try:
-            dt = datetime.fromisoformat(timestamp.replace("Z", ""))
-        except Exception:
+        from anchor_guards import parse_ts_naive
+        dt = parse_ts_naive(timestamp)  # v1.25: tz-aware stamps are converted, not subtracted raw
+        if dt is None:
             return 0.0
         age_days = (datetime.utcnow() - dt).total_seconds() / 86400.0
         if age_days < 0:
@@ -301,7 +302,7 @@ class AnchorMemory:
                 pass
             self.db.log_event(survivor, "near_dup_merge",
                               f"new text dropped (would have been {memory_id}): {text[:80]}")
-            print(f"[AnchorMemory] near-dup merge: '{text[:40]}' → survivor {survivor}; new not stored.")
+            print(f"[AnchorMemory] near-dup merge: '{text[:40]}' → survivor {survivor}; new not stored.", file=sys.stderr)
             return survivor
 
         _existing = self.db.get(memory_id)
@@ -367,7 +368,7 @@ class AnchorMemory:
                     import concept_link
                     concept_link.run(self._db_path, scope='single', single_id=memory_id)
                 except Exception as e:
-                    print(f"[AnchorMemory] eager concept_link failed for {memory_id}: {e}")
+                    print(f"[AnchorMemory] eager concept_link failed for {memory_id}: {e}", file=sys.stderr)
             import threading
             threading.Thread(target=_link, daemon=True).start()
 
@@ -385,11 +386,20 @@ class AnchorMemory:
             if self._collection.count() == 0:
                 return None
             nd = self._collection.query(query_embeddings=[embedding], n_results=3,
-                                        include=["distances"])
-            for nid, dist in zip(nd["ids"][0], nd["distances"][0]):
+                                        include=["distances", "documents"])
+            docs = (nd.get("documents") or [[]])[0]
+            from anchor_guards import literal_conflict
+            for i, (nid, dist) in enumerate(zip(nd["ids"][0], nd["distances"][0])):
                 if nid == memory_id:
                     continue
                 if (1.0 - dist) >= thr:
+                    # v1.25: "the cat is Scott" → "the cat is Scout" is an update, not a repeat.
+                    # Near-identical embeddings with a different Latin word / number keep both
+                    # rows (the dream pass's fact-check sees the pair); merging would have kept
+                    # the wrong one and cited it. Pure rephrasings still merge.
+                    old = docs[i] if i < len(docs) else ""
+                    if old and literal_conflict(text, old):
+                        continue
                     return nid
         except Exception:
             return None
@@ -400,9 +410,9 @@ class AnchorMemory:
         Missing/unparseable → 0 (treated as new; never steals an 'old' slot)."""
         if not timestamp:
             return 0.0
-        try:
-            dt = datetime.fromisoformat(str(timestamp).replace("Z", ""))
-        except Exception:
+        from anchor_guards import parse_ts_naive
+        dt = parse_ts_naive(timestamp)  # v1.25: same conversion as _recency_boost
+        if dt is None:
             return 0.0
         return max(0.0, (datetime.utcnow() - dt).total_seconds() / 86400.0)
 
@@ -650,7 +660,7 @@ class AnchorMemory:
                         c['_debug_rerank'] = s_
                     chosen = sorted(chosen, key=lambda c: -(c.get('_debug_rerank') or 0.0))
             except Exception as _re:   # a broken reranker must not break search
-                print(f'[AnchorMemory] reranker failed (non-fatal): {type(_re).__name__}: {_re}')
+                print(f'[AnchorMemory] reranker failed (non-fatal): {type(_re).__name__}: {_re}', file=sys.stderr)
             chosen = chosen[:n_results]
         for c in chosen:
             if not no_cite:
@@ -737,14 +747,21 @@ class AnchorMemory:
         # `same_day_cap` entries from the same day — the merged top set could
         # hold k × cap from one afternoon. Same rule, applied once more here.
         if self.same_day_cap:
-            day_counts, kept = {}, []
+            # v1.25: same key as search() — (day, entity) when the row has an entity, and a
+            # separate ledger for keyword-lane hits. v1.21 changed the per-query cap but this
+            # merged re-cap still counted bare days, so the proxy's multi-intent path (which is
+            # what real turns use) kept the v1.20 behaviour.
+            day_counts, lane_counts, kept = {}, {}, []
             for m in ranked:
                 day = str(m.get("timestamp") or "")[:10]
-                if day and day_counts.get(day, 0) >= self.same_day_cap:
+                if day and m.get("entity"):
+                    day = f"{day}|{m['entity']}"
+                ledger = lane_counts if m.get("_debug_source") == "keyword" else day_counts
+                if day and ledger.get(day, 0) >= self.same_day_cap:
                     continue
                 kept.append(m)
                 if day:
-                    day_counts[day] = day_counts.get(day, 0) + 1
+                    ledger[day] = ledger.get(day, 0) + 1
             ranked = kept
         ranked = ranked[:n_total]
 
@@ -1033,7 +1050,9 @@ class AnchorMemory:
                 all_mems = self.db.list_all(limit=20, offset=random.randint(0, max(0, self.count() - 20)))
                 auto_connected = 0
                 for m in all_mems[:5]:
-                    neighbors = self.search(m["text"][:100], n_results=3, associate=False, hebbian=False)
+                    # v1.25: no_cite — a nightly pass must not hand 15 random memories a citation each
+                    neighbors = self.search(m["text"][:100], n_results=3, associate=False, hebbian=False,
+                                            no_cite=True)
                     for nb in neighbors:
                         if nb["memory_id"] != m["memory_id"]:
                             existing = self.db.get_edge_weight(m["memory_id"], nb["memory_id"])
@@ -1193,7 +1212,7 @@ class AnchorMemory:
                         )
                         landed.append(got)
                     except Exception as e:
-                        print(f"[AnchorMemory] split piece failed for {mid}: {e}")
+                        print(f"[AnchorMemory] split piece failed for {mid}: {e}", file=sys.stderr)
                 if not landed:
                     continue  # nothing stored → the parent stays
                 try:

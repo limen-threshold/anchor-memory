@@ -113,7 +113,7 @@ def _client():
 def _load_cache(cache_path: str) -> dict:
     if os.path.exists(cache_path):
         try:
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
@@ -122,7 +122,7 @@ def _load_cache(cache_path: str) -> dict:
 
 def _save_cache(cache_path: str, cache: dict):
     os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
-    with open(cache_path, 'w') as f:
+    with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
@@ -163,7 +163,7 @@ def extract_concepts(memories: list, cache: dict, model: str = CONCEPT_MODEL,
 
     llm_inst = _resolve_llm(llm, legacy_model=model)
     print(f"[ConceptLink] Extracting concepts for {len(todo)} new memories "
-          f"(cache hit: {len(memories) - len(todo)}) via {llm_inst.provider}/{llm_inst.model}")
+          f"(cache hit: {len(memories) - len(todo)}) via {llm_inst.provider}/{llm_inst.model}", file=sys.stderr)
 
     for i in range(0, len(todo), BATCH_SIZE):
         batch = todo[i:i + BATCH_SIZE]
@@ -192,7 +192,7 @@ def extract_concepts(memories: list, cache: dict, model: str = CONCEPT_MODEL,
                 if mid and tags:
                     cache[mid] = tags
         except Exception as e:
-            print(f"[ConceptLink] Batch {i // BATCH_SIZE} error: {e}")
+            print(f"[ConceptLink] Batch {i // BATCH_SIZE} error: {e}", file=sys.stderr)
 
     return {m['memory_id']: cache.get(m['memory_id'], []) for m in memories}
 
@@ -256,7 +256,7 @@ def confirm_pairs(candidates: list, memories_dict: dict,
                 if 0 <= idx < len(batch):
                     confirmed.append(batch[idx])
         except Exception as e:
-            print(f"[ConceptLink] Confirm error: {e}")
+            print(f"[ConceptLink] Confirm error: {e}", file=sys.stderr)
 
     return confirmed
 
@@ -290,11 +290,11 @@ def run(db_path: str, scope: str = "mix", single_id: str = None,
         all_mems = db.list_all(limit=10000, offset=0)
         target = next((m for m in all_mems if m['memory_id'] == single_id), None)
         if not target:
-            print(f"[ConceptLink] Memory {single_id} not found")
+            print(f"[ConceptLink] Memory {single_id} not found", file=sys.stderr)
             return 0
         cached = [m for m in all_mems if m['memory_id'] in cache and m['memory_id'] != single_id]
         memories = cached + [target]
-        print(f"[ConceptLink] Single mode: target + {len(cached)} cached neighbors")
+        print(f"[ConceptLink] Single mode: target + {len(cached)} cached neighbors", file=sys.stderr)
     elif scope == "all":
         memories = db.list_all(limit=10000, offset=0)
     else:
@@ -309,16 +309,16 @@ def run(db_path: str, scope: str = "mix", single_id: str = None,
                 seen.add(m['memory_id'])
                 memories.append(m)
 
-    print(f"[ConceptLink] Scope={scope}, processing {len(memories)} memories")
+    print(f"[ConceptLink] Scope={scope}, processing {len(memories)} memories", file=sys.stderr)
     concepts = extract_concepts(memories, cache)
     _save_cache(cache_path, cache)
     print(f"[ConceptLink] Concepts ready for "
-          f"{sum(1 for v in concepts.values() if v)} memories")
+          f"{sum(1 for v in concepts.values() if v)} memories", file=sys.stderr)
 
     if scope == "single":
         target_atoms = _tag_atoms(concepts.get(single_id, []))
         if not target_atoms:
-            print("[ConceptLink] Target has no concepts. Done.")
+            print("[ConceptLink] Target has no concepts. Done.", file=sys.stderr)
             return 0
         candidates = []
         for mid, tags in concepts.items():
@@ -347,17 +347,17 @@ def run(db_path: str, scope: str = "mix", single_id: str = None,
             capped.append(c)
         candidates = capped
 
-    print(f"[ConceptLink] Concept-overlap candidates: {len(candidates)}")
+    print(f"[ConceptLink] Concept-overlap candidates: {len(candidates)}", file=sys.stderr)
     if not candidates:
         return 0
 
     memories_dict = {m['memory_id']: m for m in memories}
     confirmed = confirm_pairs(candidates, memories_dict)
-    print(f"[ConceptLink] Confirmed: {len(confirmed)}")
+    print(f"[ConceptLink] Confirmed: {len(confirmed)}", file=sys.stderr)
 
     new_edges = create_edges(db, confirmed)
     print(f"[ConceptLink] New edges: {new_edges}, "
-          f"strengthened: {len(confirmed) - new_edges}")
+          f"strengthened: {len(confirmed) - new_edges}", file=sys.stderr)
     return len(confirmed)
 
 

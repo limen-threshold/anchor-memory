@@ -29,6 +29,7 @@ spend exceeds the cap, raise SpendCapExceeded BEFORE making the call.
 """
 from __future__ import annotations
 import os
+import re
 import json
 import time
 from dataclasses import dataclass, field
@@ -200,12 +201,11 @@ class OpenAILLM(LLM):
         client = OpenAI(api_key=self.api_key or os.getenv("OPENAI_API_KEY"))
         resp = client.chat.completions.create(
             model=self.model,
-            max_tokens=max_tokens,
-            temperature=temperature,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
+            **openai_token_kwargs(self.model, max_tokens, temperature),
         )
         text = resp.choices[0].message.content or ""
         in_tok = resp.usage.prompt_tokens
@@ -315,13 +315,32 @@ class CallableLLM(LLM):
 # ──────── config loading ────────
 
 
+def openai_token_kwargs(model: str, max_tokens: int, temperature: float) -> dict:
+    """Chat Completions keyword arguments that the given OpenAI model actually accepts.
+
+    v1.25: the reasoning models (gpt-5 family, o1/o3/o4) reject ``max_tokens`` (they want
+    ``max_completion_tokens``) and reject any non-default ``temperature``. With the README's
+    recommended ``gpt-5-nano`` every curator / intent call returned HTTP 400, and the caller's
+    broad ``except`` turned that into "model configured, nothing stored". Reasoning models also
+    spend part of the budget on hidden reasoning, so the completion cap gets headroom.
+    """
+    m = (model or "").lower()
+    if re.match(r"^(gpt-5|o[1-9])", m):
+        return {"max_completion_tokens": int(max_tokens) * 2 + 2000}
+    return {"max_tokens": max_tokens, "temperature": temperature}
+
+
 def _load_config() -> dict:
     if not CONFIG_PATH.exists():
         return {}
     try:
         import yaml
-    except ImportError:
-        return {}
+    except ImportError as e:
+        # v1.25: a config file that cannot be read is an error, not an empty config —
+        # silently returning {} made a configured model look like "No LLM configured".
+        raise ConfigError(
+            f"{CONFIG_PATH} exists but pyyaml is not installed. Run: pip install pyyaml"
+        ) from e
     try:
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
     except Exception:
@@ -415,7 +434,7 @@ def _record_spend(resp: LLMResponse) -> None:
         "cost_usd": resp.cost_usd,
     }
     try:
-        with SPEND_PATH.open("a") as f:
+        with SPEND_PATH.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
     except Exception:
         pass
@@ -427,7 +446,7 @@ def today_spend_usd() -> float:
     today = _today()
     total = 0.0
     try:
-        with SPEND_PATH.open() as f:
+        with SPEND_PATH.open("r", encoding="utf-8") as f:
             for line in f:
                 try:
                     e = json.loads(line)
@@ -468,7 +487,7 @@ def session_spend_summary() -> dict:
     by_date: dict = {}
     by_provider: dict = {}
     try:
-        with SPEND_PATH.open() as f:
+        with SPEND_PATH.open("r", encoding="utf-8") as f:
             for line in f:
                 try:
                     e = json.loads(line)

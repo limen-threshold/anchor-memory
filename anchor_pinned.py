@@ -56,7 +56,7 @@ def list_identity_files(pinned_dir: str) -> list:
     manifest = os.path.join(pinned_dir, ORDER_MANIFEST)
     order = None
     if os.path.exists(manifest):
-        with open(manifest) as f:
+        with open(manifest, "r", encoding="utf-8") as f:
             order = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
     out = []
     for n in sorted(os.listdir(pinned_dir)):
@@ -96,7 +96,7 @@ def write_identity_file(pinned_dir: str, name: str, content: str, mode: str = "o
         new = (old + "\n\n" + content) if old else content
         if len(new) > IDENTITY_MAX_CHARS:
             raise ValueError(f"file would be {len(new)} chars after append; cap is {IDENTITY_MAX_CHARS}")
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(new)
     else:
         if existed:
@@ -105,7 +105,7 @@ def write_identity_file(pinned_dir: str, name: str, content: str, mode: str = "o
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             archived = os.path.join(arch_dir, f"{name[:-3]}_{stamp}.md")
             os.replace(path, archived)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(content)
     out = {"status": "appended" if mode == "append" else ("overwritten" if existed else "created"),
            "path": path, "chars": len(read_file(pinned_dir, name))}
@@ -113,7 +113,7 @@ def write_identity_file(pinned_dir: str, name: str, content: str, mode: str = "o
         out["archived_previous"] = archived
     manifest = os.path.join(pinned_dir, ORDER_MANIFEST)
     if os.path.exists(manifest):
-        with open(manifest) as f:
+        with open(manifest, "r", encoding="utf-8") as f:
             order = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
         if name not in order:
             out["warning"] = (f"{ORDER_MANIFEST} exists and does not list {name}, so wakeup() will NOT load it "
@@ -152,7 +152,7 @@ def write_session_state(pinned_dir: str, content: str) -> str:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         archived = os.path.join(arch_dir, f"session_state_{stamp}.md")
         os.replace(path, archived)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return archived
 
@@ -162,7 +162,7 @@ def read_file(pinned_dir: str, name: str) -> str:
     path = os.path.join(pinned_dir, name)
     if not os.path.exists(path):
         return ""
-    with open(path) as f:
+    with open(path, "r", encoding="utf-8") as f:
         return f.read().strip()
 
 
@@ -178,13 +178,27 @@ def append_timeline_event(pinned_dir: str, event: str, when: datetime = None) ->
     line = f"[{when.strftime('%Y-%m-%d %H:%M')}] {event}"
     os.makedirs(pinned_dir, exist_ok=True)
     path = os.path.join(pinned_dir, RECENT_TIMELINE)
-    lines = []
-    if os.path.exists(path):
-        with open(path) as f:
-            lines = [l.rstrip("\n") for l in f if l.strip()]
-    lines.append(line)
-    with open(path, "w") as f:
-        f.write("\n".join(lines[-TIMELINE_MAX_LINES:]) + "\n")
+    # v1.25: read-modify-write under a file lock — the proxy's curator thread and the MCP
+    # server both append here, and two unlocked writers lost lines. POSIX lock when available
+    # (fcntl is absent on Windows; there the write stays best-effort as before).
+    lock = open(path + ".lock", "a", encoding="utf-8")
+    try:
+        try:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        lines = []
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                lines = [l.rstrip("\n") for l in f if l.strip()]
+        lines.append(line)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines[-TIMELINE_MAX_LINES:]) + "\n")
+        os.replace(tmp, path)
+    finally:
+        lock.close()
 
 
 def _ordered_names(pinned_dir: str) -> list:
@@ -192,7 +206,7 @@ def _ordered_names(pinned_dir: str) -> list:
     skipped), else every *.md sorted by name."""
     manifest = os.path.join(pinned_dir, ORDER_MANIFEST)
     if os.path.exists(manifest):
-        with open(manifest) as f:
+        with open(manifest, "r", encoding="utf-8") as f:
             return [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
     return sorted(n for n in os.listdir(pinned_dir) if n.endswith(".md"))
 
@@ -301,5 +315,5 @@ def write_tail(pinned_dir: str, turns: list, max_pairs: int = 20) -> None:
         return
     os.makedirs(pinned_dir, exist_ok=True)
     path = os.path.join(pinned_dir, LAST_SESSION)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines[-max_pairs * 2:]))

@@ -23,7 +23,7 @@ Commands:
 
 Filters (combine freely; all optional):
     --tier core|long|short
-    --source SOURCE         exact match on the source column
+    --source SOURCE         exact match on `source` (kept in the vector-store metadata; needs chromadb)
     --since YYYY-MM-DD      timestamp >= this date
     --until YYYY-MM-DD      timestamp < this date (exclusive)
     --ids id1,id2,...       explicit id list (bypasses other filters)
@@ -68,6 +68,17 @@ def _has_column(conn, name):
     return any(r[1] == name for r in conn.execute("PRAGMA table_info(memories)"))
 
 
+def _ids_by_source(data_dir, source):
+    """Memory ids whose vector-store metadata has source == `source`; None if chromadb is missing."""
+    try:
+        import chromadb
+    except ImportError:
+        return None
+    coll = chromadb.PersistentClient(path=os.path.join(data_dir, "chroma")).get_or_create_collection(name="memories")
+    got = coll.get(where={"source": source}, include=[])
+    return list(got.get("ids") or [])
+
+
 def _where(args, conn):
     if args.ids:
         ids = [i.strip() for i in args.ids.split(",") if i.strip()]
@@ -78,10 +89,17 @@ def _where(args, conn):
         clauses.append("tier = ?")
         params.append(args.tier)
     if args.source:
-        if not _has_column(conn, "source"):
-            sys.exit("error: this store has no source column — drop --source")
-        clauses.append("source = ?")
-        params.append(args.source)
+        # v1.25: `source` has never been a SQLite column — it lives in the vector-store metadata
+        # (anchor_memory.store writes it there). The old check always exited. Resolve the ids
+        # through chroma and filter SQLite by id.
+        ids = _ids_by_source(args.data_dir, args.source)
+        if ids is None:
+            sys.exit("error: --source needs chromadb installed (source is stored in the vector-store metadata)")
+        if not ids:
+            clauses.append("0")  # matches nothing
+        else:
+            clauses.append(f"memory_id IN ({','.join('?' for _ in ids)})")
+            params.extend(ids)
     if args.since:
         clauses.append("timestamp >= ?")
         params.append(args.since)

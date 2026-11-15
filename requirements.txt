@@ -1,6 +1,10 @@
 chromadb>=0.4.0
 sentence-transformers>=2.2.0
 
+# v1.25: anchor_llm reads ~/.anchor/config.yaml with pyyaml. Without it the file was silently
+# read as empty ("No LLM configured" even though you had just written the config).
+pyyaml>=6.0
+
 # Chinese / Japanese word segmentation for the keyword lane.
 # v1.14: required, not optional. Without it CJK text has no word boundaries,
 # the whole phrase becomes one LIKE %...% token, and keyword search on CJK
@@ -12,3 +16,5 @@ jieba>=0.42
 #  only uvicorn came in as a chromadb dependency.)
 fastapi>=0.100
 uvicorn>=0.20
+# anchor_proxy.py forwards to the upstream model with httpx (v1.25: was only mentioned in docs).
+httpx>=0.24

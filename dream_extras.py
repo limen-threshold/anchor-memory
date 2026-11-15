@@ -237,7 +237,7 @@ def run_global_dedup(mem, threshold: float = 0.92, max_pairs: int = 100,
 
     os.makedirs(audit_dir, exist_ok=True)
     out = os.path.join(audit_dir, f"dedup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         json.dump(decisions_log, f, ensure_ascii=False, indent=2)
     print(f"[dream_extras] dedup done. merged={merged} kept={kept} skipped={skipped}. log: {out}")
     return {"scanned": len(ids), "candidates": len(candidates),
@@ -349,7 +349,7 @@ def run_fact_check(mem, group_threshold: float = 0.65, max_groups: int = 40,
         lines.append(f"- **ids**: {', '.join(f_.get('ids', []))}")
         lines.append(f"- **suggest**: {f_.get('suggest','?')}")
         lines.append("")
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print(f"[dream_extras] fact_check done. {len(findings)} contradictions. report: {out}")
     return {"groups": len(groups), "contradictions": len(findings), "report": out}
@@ -372,10 +372,14 @@ VERIFY_SYSTEM = (
 
 def _transcript_around(db_path: str, ts: str, window_hours: float, max_chars: int) -> list:
     import anchor_transcript
-    try:
-        t0 = datetime.fromisoformat(ts.replace("Z", ""))
-    except Exception:
+    from anchor_guards import parse_ts_naive, utc_to_local_naive
+    t0 = parse_ts_naive(ts)
+    if t0 is None:
         return []
+    # v1.25: memories are stamped in UTC, transcripts in local wall-clock time. Without this
+    # conversion the ±window landed eight hours off for a UTC+8 user — every verify came back
+    # no_transcript or checked the wrong conversation (outside review, 2026-11-14).
+    t0 = utc_to_local_naive(t0)
     start = (t0 - timedelta(hours=window_hours)).isoformat(timespec="seconds")
     end = (t0 + timedelta(hours=window_hours)).isoformat(timespec="seconds")
     rows = anchor_transcript.lines_between(db_path, start, end)
@@ -408,8 +412,9 @@ def verify_recent(mem, llm=None, days: int = 7, window_hours: float = 3.0,
     db_path = getattr(mem, "db_path", None) or os.path.dirname(getattr(getattr(mem, "db", None), "db_path", "") or "")
     if not db_path:
         return {"skipped": "no db_path"}
-    end = datetime.now().isoformat(timespec="seconds")
-    start = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+    # v1.25: the store's timestamps are UTC — compare against utcnow(), not local now()
+    end = datetime.utcnow().isoformat(timespec="seconds")
+    start = (datetime.utcnow() - timedelta(days=days)).isoformat(timespec="seconds")
     rows = mem.db.memories_by_date_range(start, "9999", limit=5000)
     ledger = os.path.join(db_path, "verify_ledger.jsonl")
     stats = {"checked": 0, "supported": 0, "unsupported": 0, "unclear": 0, "no_transcript": 0, "skipped_done": 0, "errors": 0}

@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.25.0：一次外部审读，修掉四处静默失效。** 记忆戳是 UTC、原话是本地时间，`dream_pass(verify=True)` 在 UTC+8 下整体偏八小时核不到对话；库代码 `print` 打进 stdio 的 JSON-RPC 通道；关键词车道先截断再打分，常见词多了把全命中的行挤出池子（`search_multi` 的同日上限也还在用 v1.20 的键）；README 推荐的 `gpt-5-nano` 不认代码发的参数，每次 400 再被吞掉。还有：带时区的时间戳不再炸整次 `search`、相似度过线但名字/数字不同的记忆当更新不当重复、梦程序不再给随机记忆加引用、`requirements.txt` 补 pyyaml/httpx、首次启动要下载约 470MB 模型写进了文档。接口不动。[中文说明](docs/release-notes/v1.25.0_zh.md) · [English](docs/release-notes/v1.25.0.md)。
+
 > **v1.21.0：第一次跑公开基准，修掉检索层两处病。** LongMemEval-S 零模型检索跑分（`benchmarks/longmemeval/`）显示 Anchor 自带的 embedder 单独跑 86.6% 的题能捞全证据，搭在上面的检索逻辑只剩 70.2%；消融定位到两处——同日上限把一天里不相干的会话算成一件事、关键词车道给任何 LIKE 命中固定 0.6 分被英文虚词灌满。这版：上限按「日+会话(entity)」计、关键词车道去虚词按命中词数给分；接口不动。[中文说明](docs/release-notes/v1.21.0_zh.md) · [English](docs/release-notes/v1.21.0.md)。
 
 > **v1.20.0：原话可搜、注入层体积读数、做梦时对原话核记忆。** 代理把每句话落成按天的原始对话文件，`search_transcript` 按关键词和日期翻原话、不经过任何模型；`wakeup()` 报开场注入那层有多大（超过约 200 行 / 25 KB 就提醒，不代删）；`dream_pass(verify=True)` 拿前后三小时的原话核对新记忆，结论只写成批注和账本，不改写不删。[中文说明](docs/release-notes/v1.20.0_zh.md) · [English](docs/release-notes/v1.20.0.md)。
@@ -39,8 +41,8 @@ Memories don't just get stored and retrieved. They **associate**.
 ### Dream Pass
 Run periodically (like sleep for the brain):
 - **Decay**: off by default since v1.22 — short-tier rows sink (their recency boost fades) but stay. `mem.short_delete = True` restores the 14-day deletion (archived first).
-- **Pruning**: Weak edges decay by 0.9x per pass. Edges below 0.1 are deleted.
-- **Strong edge decay**: Manual connections decay at 0.95x — they fade if not reinforced by Hebbian co-activation.
+- **Pruning**: every edge decays by 0.9x per pass. Edges below 0.1 are deleted.
+- **Strong edge decay**: edges still at or above 1.5 after that take a further 0.95x (so a manual connection fades at ~0.855x per pass) — they fade if not reinforced by Hebbian co-activation.
 - **Auto-discovery**: Randomly samples memories and connects semantically similar but unlinked ones.
 - **Emotion equilibration**: Connected memories nudge each other's emotion scores toward equilibrium.
 
@@ -242,12 +244,18 @@ print(stats)
 chromadb
 sentence-transformers
 jieba               # CJK word segmentation for the keyword lane (required since v1.14)
+pyyaml              # reads ~/.anchor/config.yaml (anchor_init / anchor_llm)
+
+# anchor_proxy.py only:
+httpx
 
 # Optional, depending on which LLM provider you use:
 anthropic           # Claude
 openai              # OpenAI / DeepSeek / GLM / Ollama (OpenAI-compatible)
 google-generativeai # Gemini
 ```
+
+**First start downloads the embedding model.** `AnchorMemory()` loads `paraphrase-multilingual-MiniLM-L12-v2` (about 470 MB) from huggingface.co the first time it runs, and the MCP server constructs it at startup — so the first `anchor_mcp.py` launch can sit for minutes with no output, and an MCP host may give up and report "could not connect" before the download finishes. Run it once by hand first (`python3 -c "from anchor_memory import AnchorMemory; AnchorMemory('/tmp/anchor_warmup')"`), and if huggingface.co is slow or blocked where you are, point the download at a mirror: `export HF_ENDPOINT=https://hf-mirror.com`. The model embeds at most 128 tokens per text; longer seed snippets are stored whole but only their first ~128 tokens take part in vector recall (the keyword lane still sees the whole text).
 
 ## Use as an MCP Server
 
@@ -544,7 +552,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.21.0](docs/release-notes/v1.21.0_zh.md) · [English](docs/release-notes/v1.21.0.md) — benchmark-driven retrieval fixes (same-day cap per conversation, keyword lane scoring). Previous: [v1.20.0](docs/release-notes/v1.20.0_zh.md) · [English](docs/release-notes/v1.20.0.md)
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.25.0](docs/release-notes/v1.25.0_zh.md) · [English](docs/release-notes/v1.25.0.md) — four silent failures from an outside review (clock bases, stdout in stdio, keyword pool truncation, gpt-5 parameters). Previous: [v1.24.0](docs/release-notes/v1.24.0_zh.md) · [English](docs/release-notes/v1.24.0.md)
 
 ## Origin
 

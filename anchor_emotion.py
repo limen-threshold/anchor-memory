@@ -96,7 +96,7 @@ def gather_daily_signal(date_iso: str, memory, pinned_dir: Optional[str] = None,
         journal_path = os.path.join(journal_dir, f"{date_iso}.md")
         if os.path.exists(journal_path):
             try:
-                with open(journal_path, "r") as f:
+                with open(journal_path, "r", encoding="utf-8") as f:
                     journal_text = f.read()[:1200]
             except Exception:
                 pass
@@ -106,7 +106,7 @@ def gather_daily_signal(date_iso: str, memory, pinned_dir: Optional[str] = None,
         state_path = os.path.join(pinned_dir, "session_state.md")
         if os.path.exists(state_path):
             try:
-                with open(state_path, "r") as f:
+                with open(state_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 if "## KEY FACTS" in content:
                     idx = content.index("## KEY FACTS")

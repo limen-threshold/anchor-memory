@@ -4,6 +4,12 @@
 
 Most recent first. Each note follows the same shape: what changed, why it matters, what to do about it.
 
+- [v1.25.0 中文](v1.25.0_zh.md) · [English](v1.25.0.md) — 2026-11-14 · 一次外部审读，修掉四处静默失效：时钟基准、stdio 里的 print、关键词车道先截后打分、gpt-5 参数；带时区戳不炸 search、更新不当重复、梦程序不加引用、requirements 补齐
+- [v1.24.0 中文](v1.24.0_zh.md) · [English](v1.24.0.md) — 可选的重排器钩子（默认关）
+- [v1.23.0 中文](v1.23.0_zh.md) · [English](v1.23.0.md) — 关键词车道退到强向量命中之后
+- [v1.22.0 中文](v1.22.0_zh.md) · [English](v1.22.0.md) — 沉下去不等于删掉；老记忆保底不许踢字面命中
+- [v1.21.0 中文](v1.21.0_zh.md) · [English](v1.21.0.md) — 第一次跑公开基准，抓出两处检索层的病，修掉
+- [v1.20.0 中文](v1.20.0_zh.md) · [English](v1.20.0.md) — 原话可搜、注入层体积读数、做梦时对原话核记忆
 - [v1.19.0 中文](v1.19.0_zh.md) · [English](v1.19.0.md) — 可选输入理解、双语召回及来源检查；代理和纯 MCP；[部署指南](../input-understanding_zh.md)
 - [v1.18.1 / v1.17.1](v1.17.1.md) · [中文](v1.17.1_zh.md) — 2026-09-19 · **identity files actually reach the window** (`wakeup()` and `--wakeup-text` return them; invitation pool no longer injected whole) — reported by 大管家. v1.17.1 = v1.17.0 + this fix only; v1.18.1 = current line
 - [v1.18.0](v1.18.0.md) · [中文](v1.18.0_zh.md) — 2026-09-19 · **consolidation stops rewriting memories** (dream-pass split off by default and non-lossy; dedup no longer rewrites/demotes the survivor; archive-before-delete; two-store decay) — upgrade if you run `dream_pass` with an LLM
