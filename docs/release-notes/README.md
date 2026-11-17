@@ -4,6 +4,7 @@
 
 Most recent first. Each note follows the same shape: what changed, why it matters, what to do about it.
 
+- [v1.29.0 中文](v1.29.0_zh.md) · [English](v1.29.0.md) — 2026-11-16 · 它自己的时间：心跳（anchor_presence）、日记、闹钟，骨架 anchor_agent 对任何会函数调用的上游跑带工具的一拍；BYO 模型，没配就不跑
 - [v1.28.0 中文](v1.28.0_zh.md) · [English](v1.28.0.md) — 2026-11-16 · 私匣：AI 自己的加密抽屉，零回显、不进记忆/转录，代理可选只注给它自己看（ANCHOR_VAULT_INJECT=1）
 - [v1.27.0 中文](v1.27.0_zh.md) · [English](v1.27.0.md) — 2026-11-16 · 从家里港四件：宿主旁路请求直通、中文词根变体进关键词车道、策展员不编关系、可选同场并入
 - [v1.26.0 中文](v1.26.0_zh.md) · [English](v1.26.0.md) — 2026-11-16 · 关键词车道 FTS5 预筛（LIKE 兜底、可关）、搜索批量读数、代理：图片不丢 / 模型调用出事件循环 / 坏 JSON 落死信不整轮丢
