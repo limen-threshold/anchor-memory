@@ -34,6 +34,7 @@ if sys.platform == "win32" or (hasattr(sys.stdout, 'buffer') and sys.stdout.enco
 sys.path.insert(0, os.path.dirname(__file__))
 
 import anchor_pinned
+import anchor_vault
 import anchor_invite
 
 
@@ -445,6 +446,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                 "required": ["name", "content"]
             }
         },
+        *anchor_vault.TOOL_DEFS,   # v1.28: vault_write / vault_read
         {
             "name": "write_session_state",
             "description": "Write your session_state.md — your own rolling state that carries across windows (what's ongoing, decisions made, current threads, mood). This is the ONLY correct way to update it: the current version is archived automatically before the new one is written, and a continuity header is added so future windows read it as their own state, not a message from someone else. Write the COMPLETE current state (not a diff), in first person. Update it when things change materially and when a conversation wraps up.",
@@ -754,6 +756,10 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                         result["invitation_how"] = anchor_invite.render_block(card)
                 except Exception:
                     pass
+                try:   # v1.28: the vault exists — count and last date only, never content
+                    result["vault"] = anchor_vault.status_line(db_path)
+                except Exception:
+                    pass
                 return result
 
             elif name == "write_session_state":
@@ -778,6 +784,9 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
             elif name == "write_identity_file":
                 return anchor_pinned.write_identity_file(pinned_dir, args["name"], args["content"],
                                                          mode=args.get("mode", "overwrite"))
+
+            elif name in anchor_vault.TOOL_NAMES:   # v1.28: the AI's private vault — content never logged here
+                return anchor_vault.handle(db_path, name, args)
 
             elif name == "leave_comment":
                 cid = mem.db.insert_comment(
@@ -824,7 +833,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.27.0"
+SERVER_VERSION = "1.28.0"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).

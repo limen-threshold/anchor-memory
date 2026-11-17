@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.28.0：私匣。** AI 自己的一格抽屉：`vault_write` / `vault_read` 两个工具，AES-256 加密落盘，回执零回显，内容不进记忆、不进转录、不进日志；代理设 `ANCHOR_VAULT_INJECT=1` 时整本只放进它自己的 system 提示。边界写明：密钥在匣子旁边，机器管理员能解——保证的是「读它得专门写代码、会留痕」。[中文说明](docs/release-notes/v1.28.0_zh.md) · [English](docs/release-notes/v1.28.0.md)。
+
 > **v1.27.0：从家里港过来四件。** 代理把宿主自己的旁路请求（Open WebUI 的标题/标签/追问生成，`### Task:` 那种）原样直通，不注入、不召回、不存记忆、不进原话；关键词车道给带方位/复数后缀的中文词同时试词根（「姥姥家」也找「姥姥」，词根和原词算同一个概念组，不稀释匹配分）；策展员提示加一条「不认识的人只记名字，不编关系」；存侧新增可选的「同场并入」（同一 `entity` 两小时内的邻居用更低的并入线，默认关）。接口不动。[中文说明](docs/release-notes/v1.27.0_zh.md) · [English](docs/release-notes/v1.27.0.md)。
 
 > **v1.26.0：外审剩下的几条做掉。** 关键词车道加 FTS5 预筛（同一分词器两边切，先要候选再跑原来的 LIKE 排序；一条没中就退回整表扫描；`ANCHOR_KEYWORD_FTS=0` 可关）；搜索里每个候选开两个 SQLite 连接改成一条批查；代理三处：最后一条用户消息里的图片不再丢、模型调用和检索挪出事件循环、策展员坏 JSON 落死信不再整轮丢弃。接口不动。[中文说明](docs/release-notes/v1.26.0_zh.md) · [English](docs/release-notes/v1.26.0.md)。
@@ -295,6 +297,7 @@ Restart Claude Code. Your AI now has these tools:
 - `mark_comments_read` — clear the unread queue after processing
 - `comment` — leave a comment under a memory (turns memories into dialogue spaces)
 - `graph_stats` — graph-level health
+- `vault_write` / `vault_read` — the AI's private vault (v1.28): encrypted, never echoed, never stored as memory; shown to the AI alone when the proxy runs with `ANCHOR_VAULT_INJECT=1`
 
 ### LobeHub / SillyTavern / other MCP hosts
 
@@ -556,7 +559,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.27.0](docs/release-notes/v1.27.0_zh.md) · [English](docs/release-notes/v1.27.0.md) — host side-requests pass through, CJK root variants in the keyword lane, curator never invents relationships, opt-in same-scene merge. Previous: [v1.26.0](docs/release-notes/v1.26.0_zh.md) · [English](docs/release-notes/v1.26.0.md)
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.28.0](docs/release-notes/v1.28.0_zh.md) · [English](docs/release-notes/v1.28.0.md) — the private vault (vault_write / vault_read, encrypted, never echoed, optional system-prompt injection). Previous: [v1.27.0](docs/release-notes/v1.27.0_zh.md) · [English](docs/release-notes/v1.27.0.md)
 
 ## Origin
 

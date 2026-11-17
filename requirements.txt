@@ -18,3 +18,6 @@ fastapi>=0.100
 uvicorn>=0.20
 # anchor_proxy.py forwards to the upstream model with httpx (v1.25: was only mentioned in docs).
 httpx>=0.24
+
+# v1.28 private vault (anchor_vault.py): uses the `cryptography` package when present, else the openssl CLI.
+# Optional — install one of the two: pip install cryptography

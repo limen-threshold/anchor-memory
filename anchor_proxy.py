@@ -347,6 +347,16 @@ def build_turn(mem, llm, pinned_dir: str, state_dir: str, messages: list,
     system = build_base_system(pinned_dir, messages)
     if client_system:
         system = f"{system}\n\n---\n\n{client_system}" if system else client_system
+    # v1.28: the AI's private vault, shown to it alone in the system prompt (ANCHOR_VAULT_INJECT=1).
+    # It lives in `system`, which the transcript, the curator and last_session never see.
+    try:
+        import anchor_vault
+        if anchor_vault.inject_enabled():
+            _vb = anchor_vault.inject_block(state_dir)
+            if _vb:
+                system = f"{system}\n\n---\n\n{_vb}" if system else _vb
+    except Exception:
+        pass
 
     dynamic = build_time_block(state_dir)
     invite = build_invitation_block(pinned_dir, state_dir)
