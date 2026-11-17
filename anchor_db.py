@@ -42,6 +42,9 @@ class AnchorDB:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._ctx_ok = False
+        # v1.26: FTS5 pre-filter for the keyword lane (ANCHOR_KEYWORD_FTS=0 turns it off; LIKE scan stays the fallback).
+        self.use_fts = os.getenv("ANCHOR_KEYWORD_FTS", "1").strip() not in ("0", "off", "false")
         self._init_tables()
 
     def _conn(self):
@@ -130,15 +133,100 @@ class AnchorDB:
             conn.commit()
         self._ensure_context_column()
         self._ensure_visual_column()
+        self._ensure_fts()
+
+    # ── v1.26: FTS5 pre-filter for the keyword lane ──
+    # The LIKE lane scans the whole table per token (v1.25 made it rank before LIMIT, which made
+    # the scan unavoidable). memories_fts holds the same text pre-segmented by the same tokenizer
+    # the query side uses (jieba when installed), so a keyword query first asks FTS for candidate
+    # ids (prefix match per token) and the LIKE+ORDER query then runs only over those rows. Zero
+    # FTS candidates → the full LIKE scan runs exactly as before. Mid-word English substrings
+    # ("hose" inside "firehose") are the one thing FTS cannot see; CJK compounds segment the same
+    # on both sides. ANCHOR_KEYWORD_FTS=0 disables the pre-filter entirely.
+    def _ensure_fts(self):
+        if not self.use_fts:
+            return
+        try:
+            with self._conn() as conn:
+                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(memory_id UNINDEXED, toks, tokenize='unicode61')")
+                n_fts = conn.execute("SELECT count(*) FROM memories_fts").fetchone()[0]
+                n_mem = conn.execute("SELECT count(*) FROM memories").fetchone()[0]
+                if n_fts == 0 and n_mem > 0:
+                    rows = conn.execute("SELECT memory_id, text FROM memories").fetchall()
+                    conn.executemany("INSERT INTO memories_fts(memory_id, toks) VALUES (?, ?)",
+                                     [(r["memory_id"], self._fts_tokens(r["text"])) for r in rows])
+                conn.commit()
+        except sqlite3.DatabaseError as e:
+            print(f"[AnchorDB] FTS5 unavailable, keyword lane stays on LIKE: {e}", file=sys.stderr)
+            self.use_fts = False
+
+    def _fts_tokens(self, text: str) -> str:
+        """Text → space-joined lower-case tokens, same segmenter as the query side (jieba if installed)."""
+        import re as _re
+        text = text or ""
+        try:
+            import jieba
+            raw = jieba.cut(text)
+        except ImportError:
+            raw = _re.split(r"[\s,;:!?/\-+()，。；：！？、（）\"'“”‘’]+", text)
+        toks = []
+        for t in raw:
+            t = t.strip().lower()
+            if t and _re.search(r"\w|[一-鿿]", t):
+                toks.append(t)
+        return " ".join(toks)
+
+    def _fts_upsert(self, conn, memory_id: str, text: str) -> None:
+        if not self.use_fts:
+            return
+        try:
+            conn.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory_id,))
+            conn.execute("INSERT INTO memories_fts(memory_id, toks) VALUES (?, ?)", (memory_id, self._fts_tokens(text)))
+        except sqlite3.DatabaseError as e:
+            print(f"[AnchorDB] FTS upsert failed (non-fatal): {e}", file=sys.stderr)
+
+    def _fts_delete(self, conn, ids: list) -> None:
+        if not self.use_fts or not ids:
+            return
+        try:
+            for i in range(0, len(ids), 400):
+                chunk = list(ids[i:i + 400])
+                conn.execute(f"DELETE FROM memories_fts WHERE memory_id IN ({','.join('?' * len(chunk))})", chunk)
+        except sqlite3.DatabaseError as e:
+            print(f"[AnchorDB] FTS delete failed (non-fatal): {e}", file=sys.stderr)
+
+    def _fts_candidates(self, conn, keywords: list, cap: int) -> list:
+        """Memory ids whose token column prefix-matches any keyword; [] when FTS is off or nothing matches."""
+        if not self.use_fts or not keywords:
+            return []
+        terms = []
+        for kw in keywords:
+            kw = (kw or "").strip().lower().replace('"', "")
+            if kw:
+                terms.append(f'"{kw}"*')
+        if not terms:
+            return []
+        try:
+            rows = conn.execute(
+                "SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts) LIMIT ?",
+                (" OR ".join(terms), cap)).fetchall()
+            return [r["memory_id"] for r in rows]
+        except sqlite3.DatabaseError as e:
+            print(f"[AnchorDB] FTS query failed, falling back to LIKE: {e}", file=sys.stderr)
+            return []
 
     def _ensure_context_column(self):
-        """Add context column if missing. text = search summary, context = full original."""
+        """Add context column if missing. text = search summary, context = full original.
+        v1.26: checked once per AnchorDB instance (it used to probe the schema on every insert/get_context)."""
+        if getattr(self, "_ctx_ok", False):
+            return
         with self._conn() as conn:
             try:
                 conn.execute("SELECT context FROM memories LIMIT 1")
             except sqlite3.OperationalError:
                 conn.execute("ALTER TABLE memories ADD COLUMN context TEXT DEFAULT ''")
                 conn.commit()
+        self._ctx_ok = True
 
     def _ensure_visual_column(self):
         """Add visual_embedding column if missing. For Anchor Vision integration."""
@@ -306,6 +394,7 @@ class AnchorDB:
                 """,
                 (memory_id, text, now, tag, tier, emotion_score, context),
             )
+            self._fts_upsert(conn, memory_id, text)
             conn.commit()
         self.log_event(memory_id, "created", f"tag={tag} tier={tier}")
 
@@ -366,6 +455,7 @@ class AnchorDB:
                 (memory_id, memory_id),
             )
             conn.execute("DELETE FROM memories WHERE memory_id = ?", (memory_id,))
+            self._fts_delete(conn, [memory_id])
             conn.commit()
         return True
 
@@ -463,17 +553,24 @@ class AnchorDB:
         order_by = kw_order_by(["text LIKE ?"] * len(keywords))
 
         with self._conn() as conn:
+            # v1.26: FTS5 pre-filter — ask the token index for candidates first, then run the exact
+            # LIKE+ORDER query only over those rows. No candidates → full scan, exactly as before.
+            cand = self._fts_candidates(conn, keywords, cap=max(limit * 4, 1200))
+            scope_sql, scope_params = "", []
+            if cand:
+                scope_sql = f" AND memory_id IN ({','.join('?' * len(cand))})"
+                scope_params = list(cand)
             if tag:
                 rows = conn.execute(
                     f"SELECT memory_id, text, timestamp, tag FROM memories "
-                    f"WHERE ({like_clauses}) AND tag = ?{order_by} LIMIT ?",
-                    like_params + [tag] + like_params + [limit]
+                    f"WHERE ({like_clauses}) AND tag = ?{scope_sql}{order_by} LIMIT ?",
+                    like_params + [tag] + scope_params + like_params + [limit]
                 ).fetchall()
             else:
                 rows = conn.execute(
                     f"SELECT memory_id, text, timestamp, tag FROM memories "
-                    f"WHERE ({like_clauses}){order_by} LIMIT ?",
-                    like_params + like_params + [limit]
+                    f"WHERE ({like_clauses}){scope_sql}{order_by} LIMIT ?",
+                    like_params + scope_params + like_params + [limit]
                 ).fetchall()
             results = [dict(r) for r in rows]
             found_ids = {r["memory_id"] for r in results}
@@ -534,6 +631,7 @@ class AnchorDB:
                 q = ",".join("?" * len(chunk))
                 conn.execute(f"DELETE FROM edges WHERE source_id IN ({q}) OR target_id IN ({q})", chunk + chunk)
                 n += conn.execute(f"DELETE FROM memories WHERE memory_id IN ({q})", chunk).rowcount
+                self._fts_delete(conn, chunk)
             conn.commit()
         for mid in ids:
             try:
@@ -543,6 +641,54 @@ class AnchorDB:
         return n
 
     # ── Citation tracking ──
+
+    def stats_for(self, memory_ids: list) -> dict:
+        """v1.26: {memory_id: (usage_count, emotion_score)} in one query (search used to open two
+        connections per candidate)."""
+        ids = [m for m in dict.fromkeys(memory_ids) if m]
+        out = {}
+        if not ids:
+            return out
+        with self._conn() as conn:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                for r in conn.execute(
+                        f"SELECT memory_id, usage_count, emotion_score FROM memories WHERE memory_id IN ({','.join('?' * len(chunk))})",
+                        chunk).fetchall():
+                    out[r["memory_id"]] = (int(r["usage_count"] or 0),
+                                           float(r["emotion_score"]) if r["emotion_score"] is not None else 0.5)
+        return out
+
+    def cite_batch(self, memory_ids: list) -> None:
+        """v1.26: usage_count+1 for all given ids in one statement."""
+        ids = [m for m in dict.fromkeys(memory_ids) if m]
+        if not ids:
+            return
+        now = datetime.utcnow().isoformat()
+        with self._conn() as conn:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                conn.execute(
+                    f"UPDATE memories SET usage_count = usage_count + 1, last_used = ? WHERE memory_id IN ({','.join('?' * len(chunk))})",
+                    [now] + chunk)
+            conn.commit()
+
+    def contexts_for(self, memory_ids: list) -> dict:
+        """v1.26: {memory_id: context} for the ids that have one, in one query."""
+        ids = [m for m in dict.fromkeys(memory_ids) if m]
+        out = {}
+        if not ids:
+            return out
+        self._ensure_context_column()
+        with self._conn() as conn:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                for r in conn.execute(
+                        f"SELECT memory_id, context FROM memories WHERE memory_id IN ({','.join('?' * len(chunk))})",
+                        chunk).fetchall():
+                    if r["context"]:
+                        out[r["memory_id"]] = r["context"]
+        return out
 
     def get_citation_count(self, memory_id: str) -> int:
         with self._conn() as conn:

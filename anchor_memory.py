@@ -576,19 +576,17 @@ class AnchorMemory:
             where=where,
         )
 
-        for doc, meta, dist in zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            results["distances"][0],
-        ):
-            if dist > 0.8:
-                continue
-            if meta is None:
-                continue
+        hits = [(doc, meta, dist) for doc, meta, dist in zip(
+            results["documents"][0], results["metadatas"][0], results["distances"][0])
+            if dist <= 0.8 and meta is not None]
+        # v1.26: one query for every candidate's usage_count/emotion_score (was two connections per row)
+        stats = self.db.stats_for([m.get("memory_id", "unknown") for _, m, _ in hits])
+        for doc, meta, dist in hits:
             mid = meta.get("memory_id", "unknown")
             ts = meta.get("timestamp", "")
-            citation_boost = min(self.db.get_citation_count(mid) * 0.02, 0.15)
-            emotion_boost = self.db.get_emotion_score(mid) * 0.1
+            _uc, _es = stats.get(mid, (0, 0.5))
+            citation_boost = min(_uc * 0.02, 0.15)
+            emotion_boost = _es * 0.1
             recency_boost = self._recency_boost(ts)
             boost = citation_boost + emotion_boost + recency_boost
             candidates.append({
@@ -662,11 +660,12 @@ class AnchorMemory:
             except Exception as _re:   # a broken reranker must not break search
                 print(f'[AnchorMemory] reranker failed (non-fatal): {type(_re).__name__}: {_re}', file=sys.stderr)
             chosen = chosen[:n_results]
+        if not no_cite and chosen:
+            self.db.cite_batch([c["memory_id"] for c in chosen])   # v1.26: one UPDATE, not one per row
+        _ctxs = self.db.contexts_for([c["memory_id"] for c in chosen]) if (include_context and chosen) else {}
         for c in chosen:
-            if not no_cite:
-                self.db.cite(c["memory_id"])
             if include_context:
-                ctx = self.db.get_context(c["memory_id"])
+                ctx = _ctxs.get(c["memory_id"])
                 if ctx:
                     c["context"] = ctx
             if debug:

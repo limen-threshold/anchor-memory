@@ -55,6 +55,7 @@ Usage:
 Env: ANCHOR_UPSTREAM_URL, ANCHOR_UPSTREAM_KEY, ANCHOR_UPSTREAM_MODEL
 """
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -265,9 +266,9 @@ def split_intents(llm, user_text: str, prev_turns: list) -> dict:
                         user=f"Previous turns:\n{ctx}\n\nMessage:\n{user_text[:2000]}",
                         max_tokens=300)
         raw = resp.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        data = json.loads(raw)
+        data = parse_json_lenient(raw)
+        if not isinstance(data, dict):
+            return {"skip": False, "intents": [user_text]}
         intents = [i for i in data.get("intents", []) if isinstance(i, str) and i.strip()]
         return {"skip": bool(data.get("skip")), "intents": intents[:GATE_MAX_INTENTS] or [user_text]}
     except Exception:
@@ -356,13 +357,65 @@ def build_turn(mem, llm, pinned_dir: str, state_dir: str, messages: list,
         dynamic += "\n\n" + recall
     wrapped = f"<context_now>\n{dynamic}\n</context_now>"
 
+    out = inject_into_last_user(messages, wrapped)
+    return system, out
+
+
+def inject_into_last_user(messages: list, wrapped: str) -> list:
+    """Prepend the <context_now> block to the last user message. v1.26: a list-of-parts message keeps
+    its non-text parts (images, files) — they used to be flattened away, so a multimodal client behind
+    the proxy silently lost every picture."""
     out = list(messages)
     for i in range(len(out) - 1, -1, -1):
-        if out[i].get("role") == "user":
-            out[i] = dict(out[i])
-            out[i]["content"] = f"{wrapped}\n\n{extract_text(out[i].get('content'))}"
-            break
-    return system, out
+        if out[i].get("role") != "user":
+            continue
+        out[i] = dict(out[i])
+        content = out[i].get("content")
+        text = f"{wrapped}\n\n{extract_text(content)}"
+        if isinstance(content, list):
+            others = [p for p in content if not (isinstance(p, dict) and p.get("type") == "text")]
+            out[i]["content"] = [{"type": "text", "text": text}] + others
+        else:
+            out[i]["content"] = text
+        break
+    return out
+
+
+def parse_json_lenient(raw: str):
+    """json.loads, else the first [...] / {...} block in the text, else None. Model output arrives
+    with prose around it often enough that strict parsing dropped whole curator turns (v1.26)."""
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    # whichever bracket opens first is the outer container (an object that holds a list must not
+    # be read as the list)
+    i_arr, i_obj = raw.find("["), raw.find("{")
+    order = [r"\[.*\]", r"\{.*\}"] if (i_arr != -1 and (i_obj == -1 or i_arr < i_obj)) else [r"\{.*\}", r"\[.*\]"]
+    for pat in order:
+        m = re.search(pat, raw, re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                continue
+    return None
+
+
+def dead_letter(db_path: str, kind: str, raw: str, err: str = "") -> str:
+    """Keep what the model said when we could not use it. <db_path>/dead_letter/<kind>_<ts>.txt"""
+    try:
+        d = os.path.join(db_path or ".", "dead_letter")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, f"{kind}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.txt")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write((f"# {err}\n\n" if err else "") + (raw or ""))
+        return p
+    except Exception:
+        return ""
 
 
 # ──────── post-response side effects (background) ────────
@@ -409,24 +462,38 @@ def curate_turn(mem, llm, pinned_dir: str, user_text: str, assistant_text: str):
                         user=f"USER:\n{user_text[:3000]}\n\nASSISTANT:\n{assistant_text[:3000]}",
                         max_tokens=1500)
         raw = resp.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        entries = json.loads(raw)
+        entries = parse_json_lenient(raw)
+        if not isinstance(entries, list):
+            p = dead_letter(getattr(mem, "db_path", ""), "curator", raw, "curator output was not a JSON list")
+            print(f"[anchor_proxy] curator output unusable; kept at {p or '(dead-letter write failed)'}")
+            return
+        stored = 0
         for e in entries:
-            index = (e.get("index") or "").strip()
-            if not index:
+            if not isinstance(e, dict):
                 continue
-            mid = f"mem_{uuid.uuid4().hex[:8]}"
-            mem.store(memory_id=mid, text=index,
-                      tag=e.get("tag", "general"),
-                      tier=e.get("tier", "long"),
-                      emotion_score=float(e.get("emotion", 0.5)),
-                      context=(e.get("context") or "").strip(),
-                      source="curator")
-            print(f"[anchor_proxy] curator stored {mid}: {index[:60]}")
-            event = (e.get("timeline_event") or "").strip()
-            if event:
-                anchor_pinned.append_timeline_event(pinned_dir, event)
+            try:   # v1.26: one bad entry (emotion not a number, …) no longer drops the whole turn
+                index = (e.get("index") or "").strip()
+                if not index:
+                    continue
+                try:
+                    emo = float(e.get("emotion", 0.5))
+                except (TypeError, ValueError):
+                    emo = 0.5
+                mid = f"mem_{uuid.uuid4().hex[:8]}"
+                mem.store(memory_id=mid, text=index,
+                          tag=e.get("tag", "general") or "general",
+                          tier=e.get("tier", "long") or "long",
+                          emotion_score=emo,
+                          context=(e.get("context") or "").strip(),
+                          source="curator")
+                stored += 1
+                print(f"[anchor_proxy] curator stored {mid}: {index[:60]}")
+                event = (e.get("timeline_event") or "").strip()
+                if event:
+                    anchor_pinned.append_timeline_event(pinned_dir, event)
+            except Exception as ee:
+                p = dead_letter(getattr(mem, "db_path", ""), "curator_entry", json.dumps(e, ensure_ascii=False), str(ee))
+                print(f"[anchor_proxy] curator entry failed ({ee}); kept at {p}")
     except Exception as e:
         print(f"[anchor_proxy] curator error: {e}")
 
@@ -530,8 +597,10 @@ def create_app(db_path: str, pinned_dir: str, upstream: str, upstream_model: str
 
         messages = step_trim_history(messages, history_pairs, history_pairs_max)
 
-        system, out_messages = build_turn(mem, llm, pinned_dir,
-                                          db_path, messages, client_system)
+        # v1.26: build_turn does the intent-split LLM call, the embedding and the SQLite reads — all
+        # blocking. Off the event loop, so one slow split no longer stalls every concurrent request.
+        system, out_messages = await asyncio.to_thread(build_turn, mem, llm, pinned_dir,
+                                                       db_path, messages, client_system)
 
         body = dict(body)
         body["messages"] = ([{"role": "system", "content": system}] if system else []) + out_messages

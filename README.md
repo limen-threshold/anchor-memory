@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.26.0：外审剩下的几条做掉。** 关键词车道加 FTS5 预筛（同一分词器两边切，先要候选再跑原来的 LIKE 排序；一条没中就退回整表扫描；`ANCHOR_KEYWORD_FTS=0` 可关）；搜索里每个候选开两个 SQLite 连接改成一条批查；代理三处：最后一条用户消息里的图片不再丢、模型调用和检索挪出事件循环、策展员坏 JSON 落死信不再整轮丢弃。接口不动。[中文说明](docs/release-notes/v1.26.0_zh.md) · [English](docs/release-notes/v1.26.0.md)。
+
 > **v1.25.0：一次外部审读，修掉四处静默失效。** 记忆戳是 UTC、原话是本地时间，`dream_pass(verify=True)` 在 UTC+8 下整体偏八小时核不到对话；库代码 `print` 打进 stdio 的 JSON-RPC 通道；关键词车道先截断再打分，常见词多了把全命中的行挤出池子（`search_multi` 的同日上限也还在用 v1.20 的键）；README 推荐的 `gpt-5-nano` 不认代码发的参数，每次 400 再被吞掉。还有：带时区的时间戳不再炸整次 `search`、相似度过线但名字/数字不同的记忆当更新不当重复、梦程序不再给随机记忆加引用、`requirements.txt` 补 pyyaml/httpx、首次启动要下载约 470MB 模型写进了文档。接口不动。[中文说明](docs/release-notes/v1.25.0_zh.md) · [English](docs/release-notes/v1.25.0.md)。
 
 > **v1.21.0：第一次跑公开基准，修掉检索层两处病。** LongMemEval-S 零模型检索跑分（`benchmarks/longmemeval/`）显示 Anchor 自带的 embedder 单独跑 86.6% 的题能捞全证据，搭在上面的检索逻辑只剩 70.2%；消融定位到两处——同日上限把一天里不相干的会话算成一件事、关键词车道给任何 LIKE 命中固定 0.6 分被英文虚词灌满。这版：上限按「日+会话(entity)」计、关键词车道去虚词按命中词数给分；接口不动。[中文说明](docs/release-notes/v1.21.0_zh.md) · [English](docs/release-notes/v1.21.0.md)。
@@ -552,7 +554,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.25.0](docs/release-notes/v1.25.0_zh.md) · [English](docs/release-notes/v1.25.0.md) — four silent failures from an outside review (clock bases, stdout in stdio, keyword pool truncation, gpt-5 parameters). Previous: [v1.24.0](docs/release-notes/v1.24.0_zh.md) · [English](docs/release-notes/v1.24.0.md)
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.26.0](docs/release-notes/v1.26.0_zh.md) · [English](docs/release-notes/v1.26.0.md) — FTS5 pre-filter for the keyword lane, batched reads in search, proxy fixes (images kept, work off the event loop, dead-letter for bad curator JSON). Previous: [v1.25.0](docs/release-notes/v1.25.0_zh.md) · [English](docs/release-notes/v1.25.0.md)
 
 ## Origin
 
