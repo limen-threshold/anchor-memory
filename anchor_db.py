@@ -511,6 +511,29 @@ class AnchorDB:
                 keywords.append(t)
         return keywords
 
+    # v1.27 (ported from the house gateway, 2026-09-19 "小鸡案"): jieba keeps 「姥姥家」 as one word, so the
+    # keyword lane never saw memories that only say 「姥姥」. A handful of deterministic locative /
+    # plural suffixes are stripped and the root joins the SAME concept group as the surface word:
+    # a row matching either variant counts once, the denominator is the number of groups, so the
+    # expansion cannot dilute the match score. Zero model, zero wordlist; the cost of a wrong root
+    # is one extra LIKE candidate.
+    _ROOT_SUFFIXES = ("家里", "那边", "那儿", "这边", "家", "们", "里", "那", "边")
+
+    @classmethod
+    def _root_variants(cls, kw: str) -> list:
+        kw = (kw or "").strip()
+        if len(kw) < 3 or not all("一" <= c <= "鿿" for c in kw):
+            return []
+        for suf in cls._ROOT_SUFFIXES:   # longer suffixes first
+            if kw.endswith(suf):
+                root = kw[: -len(suf)]
+                return [root] if len(root) >= 2 else []
+        return []
+
+    def keyword_groups(self, query: str) -> list:
+        """Query → concept groups: [[surface, root?], ...]. Same tokenizer and stopwords as before."""
+        return [[kw, *self._root_variants(kw)] for kw in self._tokenize_query(query)]
+
     def memories_by_date_range(self, start_iso: str, end_iso: str, limit: int = 1000) -> list:
         """Rows with start_iso <= timestamp < end_iso, oldest first (v1.14).
 
@@ -536,12 +559,13 @@ class AnchorDB:
         segmented to ["记忆", "质量", "问题"] and any memory containing any
         of those tokens matches.
         """
-        keywords = self._tokenize_query(query)
-        if not keywords:
+        groups = self.keyword_groups(query)
+        if not groups:
             # Fallback: treat whole query as a single token
-            keywords = [query.strip()] if query.strip() else []
-            if not keywords:
+            groups = [[query.strip()]] if query.strip() else []
+            if not groups:
                 return []
+        keywords = [v for g in groups for v in g]   # every surface word + root variant (v1.27)
 
         like_clauses = " OR ".join(["text LIKE ?"] * len(keywords))
         like_params = [f"%{kw}%" for kw in keywords]
@@ -549,8 +573,11 @@ class AnchorDB:
         # first `limit` rows in rowid order, and a store with >limit rows containing one common
         # token silently dropped the rows that matched every token (outside review, 2026-11-14).
         # No timestamp tie-break: the lane must not pre-decide recency (v1.10 lesson).
+        # v1.27: one CASE per concept group (surface OR root), so a root hit ranks like a surface hit.
         from anchor_guards import kw_order_by
-        order_by = kw_order_by(["text LIKE ?"] * len(keywords))
+        group_clauses = ["(" + " OR ".join(["text LIKE ?"] * len(g)) + ")" for g in groups]
+        order_by = kw_order_by(group_clauses)
+        order_params = [f"%{v}%" for g in groups for v in g]
 
         with self._conn() as conn:
             # v1.26: FTS5 pre-filter — ask the token index for candidates first, then run the exact
@@ -564,13 +591,13 @@ class AnchorDB:
                 rows = conn.execute(
                     f"SELECT memory_id, text, timestamp, tag FROM memories "
                     f"WHERE ({like_clauses}) AND tag = ?{scope_sql}{order_by} LIMIT ?",
-                    like_params + [tag] + scope_params + like_params + [limit]
+                    like_params + [tag] + scope_params + order_params + [limit]
                 ).fetchall()
             else:
                 rows = conn.execute(
                     f"SELECT memory_id, text, timestamp, tag FROM memories "
                     f"WHERE ({like_clauses}){scope_sql}{order_by} LIMIT ?",
-                    like_params + scope_params + like_params + [limit]
+                    like_params + scope_params + order_params + [limit]
                 ).fetchall()
             results = [dict(r) for r in rows]
             found_ids = {r["memory_id"] for r in results}

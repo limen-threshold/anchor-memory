@@ -361,6 +361,27 @@ def build_turn(mem, llm, pinned_dir: str, state_dir: str, messages: list,
     return system, out
 
 
+HOST_TASK_RE = re.compile(
+    r'### Task:|Generate 1-3 broad tags|JSON format: \{ ?"title"|Create a concise, 3-5 word title|'
+    r'Generate a concise, 3-5 word title|Suggest 3-5 relevant follow-up questions|Generate 1-3 broad tags categorizing')
+
+
+def is_host_task(messages: list) -> bool:
+    """v1.27 (ported from the house gateway): Open WebUI and friends send *extra* requests through
+    the same endpoint — title generation, tag generation, follow-up suggestions — each wrapping the
+    chat in a '### Task:' prompt. They are not the person talking. Treating them as turns meant a
+    recall block and a curator pass per side request, memories about "generate 3 tags", and a
+    transcript full of templates. A request whose last user message (or system prompt) matches
+    one of those templates is forwarded untouched and leaves no trace."""
+    last_user, system = "", ""
+    for m in reversed(messages or []):
+        if m.get("role") == "user" and not last_user:
+            last_user = extract_text(m.get("content"))
+        elif m.get("role") == "system" and not system:
+            system = extract_text(m.get("content"))
+    return bool(HOST_TASK_RE.search(last_user[:1500]) or HOST_TASK_RE.search(system[:1500]))
+
+
 def inject_into_last_user(messages: list, wrapped: str) -> list:
     """Prepend the <context_now> block to the last user message. v1.26: a list-of-parts message keeps
     its non-text parts (images, files) — they used to be flattened away, so a multimodal client behind
@@ -444,7 +465,10 @@ CURATOR_SYSTEM = (
     "Do NOT store: pure smalltalk, assistant boilerplate, things obviously "
     "already known. Assistant guesses about the user's meaning or motive are not "
     "user testimony; never turn them into confirmed user facts without the user's "
-    "explicit evidence or confirmation. Valid JSON only, no markdown fences."
+    "explicit evidence or confirmation. "
+    "UNKNOWN PEOPLE: when a name appears and this exchange does not say who that person is to the "
+    "user (friend / daughter / colleague / ...), store the bare name — never invent the relationship. "
+    "Valid JSON only, no markdown fences."
 )
 
 
@@ -597,10 +621,15 @@ def create_app(db_path: str, pinned_dir: str, upstream: str, upstream_model: str
 
         messages = step_trim_history(messages, history_pairs, history_pairs_max)
 
-        # v1.26: build_turn does the intent-split LLM call, the embedding and the SQLite reads — all
-        # blocking. Off the event loop, so one slow split no longer stalls every concurrent request.
-        system, out_messages = await asyncio.to_thread(build_turn, mem, llm, pinned_dir,
-                                                       db_path, messages, client_system)
+        # v1.27: the host's own side requests (title/tags/follow-ups) pass through untouched.
+        host_task = is_host_task(raw_messages)
+        if host_task:
+            system, out_messages = client_system, messages
+        else:
+            # v1.26: build_turn does the intent-split LLM call, the embedding and the SQLite reads — all
+            # blocking. Off the event loop, so one slow split no longer stalls every concurrent request.
+            system, out_messages = await asyncio.to_thread(build_turn, mem, llm, pinned_dir,
+                                                           db_path, messages, client_system)
 
         body = dict(body)
         body["messages"] = ([{"role": "system", "content": system}] if system else []) + out_messages
@@ -610,6 +639,8 @@ def create_app(db_path: str, pinned_dir: str, upstream: str, upstream_model: str
         url = f"{upstream}/chat/completions"
 
         def side_effects(text):
+            if host_task:   # v1.27: no transcript, no curator, no last_session for a host side request
+                return
             threading.Thread(target=after_response,
                              args=(mem, llm, pinned_dir, messages, text),
                              daemon=True).start()

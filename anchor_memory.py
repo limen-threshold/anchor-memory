@@ -221,6 +221,14 @@ class AnchorMemory:
         # construction, and the *old* one would survive).
         self.near_dup_merge_sim = 0.93
         self.near_dup_bypass_words = ("勘误", "更正", "作废", "correction")
+        # v1.27 (ported from the house gateway, 2026-09-06): a curator that re-reads a conversation
+        # still in progress stores the same scene several times at similarities just under the
+        # global gate. When the new text carries an `entity` (session / conversation id) and the
+        # neighbour has the SAME entity and was stored within `scene_merge_window_sec`, the merge
+        # threshold drops to `scene_merge_sim` instead. Opt-in: None keeps the global gate only —
+        # the house value was calibrated on a different embedder and is not copied here.
+        self.scene_merge_sim = None
+        self.scene_merge_window_sec = 2 * 3600
 
     def reload(self):
         """Re-create ChromaDB client to pick up external writes."""
@@ -294,7 +302,7 @@ class AnchorMemory:
         # instead of becoming a second row that then competes with the first
         # at recall time. Re-storing the SAME id is an edit, not a duplicate —
         # it goes through the upsert path untouched.
-        survivor = self._near_dup_survivor(memory_id, text, embedding)
+        survivor = self._near_dup_survivor(memory_id, text, embedding, entity=entity)
         if survivor:
             try:
                 self.db.cite(survivor)
@@ -374,7 +382,23 @@ class AnchorMemory:
 
         return memory_id
 
-    def _near_dup_survivor(self, memory_id: str, text: str, embedding: list):
+    def _merge_threshold(self, neighbour_meta: dict, entity: str, now: datetime = None) -> float:
+        """Global near-dup gate, or the lower same-scene gate when the neighbour shares this entity
+        and was stored within the scene window (v1.27, opt-in via scene_merge_sim)."""
+        thr = self.near_dup_merge_sim
+        if not (self.scene_merge_sim and entity and neighbour_meta):
+            return thr
+        if (neighbour_meta or {}).get("entity") != entity:
+            return thr
+        from anchor_guards import parse_ts_naive
+        dt = parse_ts_naive((neighbour_meta or {}).get("timestamp"))
+        if dt is None:
+            return thr
+        if abs(((now or datetime.utcnow()) - dt).total_seconds()) < self.scene_merge_window_sec:
+            return min(thr, self.scene_merge_sim)
+        return thr
+
+    def _near_dup_survivor(self, memory_id: str, text: str, embedding: list, entity: str = None):
         """Return the id of an existing memory that duplicates `text`, or None.
         Never raises — a vector-store hiccup must not block a store()."""
         thr = self.near_dup_merge_sim
@@ -386,13 +410,15 @@ class AnchorMemory:
             if self._collection.count() == 0:
                 return None
             nd = self._collection.query(query_embeddings=[embedding], n_results=3,
-                                        include=["distances", "documents"])
+                                        include=["distances", "documents", "metadatas"])
             docs = (nd.get("documents") or [[]])[0]
+            metas = (nd.get("metadatas") or [[]])[0]
             from anchor_guards import literal_conflict
             for i, (nid, dist) in enumerate(zip(nd["ids"][0], nd["distances"][0])):
                 if nid == memory_id:
                     continue
-                if (1.0 - dist) >= thr:
+                thr_i = self._merge_threshold(metas[i] if i < len(metas) else None, entity)
+                if (1.0 - dist) >= thr_i:
                     # v1.25: "the cat is Scott" → "the cat is Scout" is an update, not a repeat.
                     # Near-identical embeddings with a different Latin word / number keep both
                     # rows (the dream pass's fact-check sees the pair); merging would have kept
@@ -792,15 +818,15 @@ class AnchorMemory:
         vector hits and ahead of weak ones, and a lone weak match (~0.8) does
         not. Function words are dropped by the tokenizer (``keyword_stopwords``).
         """
-        tokens = self.db._tokenize_query(query)
-        if not tokens:
+        groups = self.db.keyword_groups(query)   # v1.27: [[surface, root?], ...] — a root hit counts as the group
+        if not groups:
             return []
         pool = self.db.keyword_search(query, limit=max(n_results * 8, 300), tag=tag)
-        need = 1 if len(tokens) == 1 else 2
+        need = 1 if len(groups) == 1 else 2
         out = []
         for r in pool:
             text = (r.get("text") or "").lower()
-            matched = sum(1 for t in tokens if t.lower() in text)
+            matched = sum(1 for g in groups if any(v.lower() in text for v in g))
             if matched < need:
                 continue
             out.append({
@@ -809,7 +835,7 @@ class AnchorMemory:
                 "tag": r.get("tag", "general"),
                 "entity": None,
                 "snippet": r.get("text", ""),
-                "score": self.keyword_score_base - 0.45 * (matched / len(tokens)),   # v1.23: base 0.95 (was 0.65)
+                "score": self.keyword_score_base - 0.45 * (matched / len(groups)),   # v1.23: base 0.95 (was 0.65)
                 "_debug_raw_distance": None,
                 "_debug_citation_boost": 0.0,
                 "_debug_emotion_boost": 0.0,

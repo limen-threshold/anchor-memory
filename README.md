@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.27.0：从家里港过来四件。** 代理把宿主自己的旁路请求（Open WebUI 的标题/标签/追问生成，`### Task:` 那种）原样直通，不注入、不召回、不存记忆、不进原话；关键词车道给带方位/复数后缀的中文词同时试词根（「姥姥家」也找「姥姥」，词根和原词算同一个概念组，不稀释匹配分）；策展员提示加一条「不认识的人只记名字，不编关系」；存侧新增可选的「同场并入」（同一 `entity` 两小时内的邻居用更低的并入线，默认关）。接口不动。[中文说明](docs/release-notes/v1.27.0_zh.md) · [English](docs/release-notes/v1.27.0.md)。
+
 > **v1.26.0：外审剩下的几条做掉。** 关键词车道加 FTS5 预筛（同一分词器两边切，先要候选再跑原来的 LIKE 排序；一条没中就退回整表扫描；`ANCHOR_KEYWORD_FTS=0` 可关）；搜索里每个候选开两个 SQLite 连接改成一条批查；代理三处：最后一条用户消息里的图片不再丢、模型调用和检索挪出事件循环、策展员坏 JSON 落死信不再整轮丢弃。接口不动。[中文说明](docs/release-notes/v1.26.0_zh.md) · [English](docs/release-notes/v1.26.0.md)。
 
 > **v1.25.0：一次外部审读，修掉四处静默失效。** 记忆戳是 UTC、原话是本地时间，`dream_pass(verify=True)` 在 UTC+8 下整体偏八小时核不到对话；库代码 `print` 打进 stdio 的 JSON-RPC 通道；关键词车道先截断再打分，常见词多了把全命中的行挤出池子（`search_multi` 的同日上限也还在用 v1.20 的键）；README 推荐的 `gpt-5-nano` 不认代码发的参数，每次 400 再被吞掉。还有：带时区的时间戳不再炸整次 `search`、相似度过线但名字/数字不同的记忆当更新不当重复、梦程序不再给随机记忆加引用、`requirements.txt` 补 pyyaml/httpx、首次启动要下载约 470MB 模型写进了文档。接口不动。[中文说明](docs/release-notes/v1.25.0_zh.md) · [English](docs/release-notes/v1.25.0.md)。
@@ -162,7 +164,7 @@ All knobs live on the `AnchorMemory` instance; `same_day_cap = 0` restores plain
 
 ### Store-Side Dedup Gate (v1.14+)
 
-`store()` checks the nearest existing memory first. Cosine ≥ `near_dup_merge_sim` (default 0.93 for the default MiniLM embedder; re-calibrate if you swap models) → the new text is not stored, the existing one is cited, and `store()` returns the **survivor's id**. The MCP tool reports `status: merged_into_existing`. Re-storing the same id is an edit and bypasses the gate; so does text containing a word from `near_dup_bypass_words` (`勘误 / 更正 / 作废 / correction`) — a correction is near-identical to the entry it corrects, and without the bypass the *wrong* entry would survive. Set to 0 to disable.
+`store()` checks the nearest existing memory first. Cosine ≥ `near_dup_merge_sim` (default 0.93 for the default MiniLM embedder; re-calibrate if you swap models) → the new text is not stored, the existing one is cited, and `store()` returns the **survivor's id**. The MCP tool reports `status: merged_into_existing`. Re-storing the same id is an edit and bypasses the gate; so does text containing a word from `near_dup_bypass_words` (`勘误 / 更正 / 作废 / correction`) — a correction is near-identical to the entry it corrects, and without the bypass the *wrong* entry would survive. Set to 0 to disable. **Same-scene merge (v1.27, opt-in):** set `mem.scene_merge_sim = 0.85` (or whatever your embedder needs) and store with `entity=<session id>`; a neighbour with the same entity stored within `scene_merge_window_sec` (2 h) merges at that lower threshold instead — for curators that re-read a conversation still in progress. `None` (default) keeps the global gate only.
 
 ### Calendar Reads (v1.14+)
 
@@ -180,7 +182,7 @@ All knobs live on the `AnchorMemory` instance; `same_day_cap = 0` restores plain
 ### Benchmark-Driven Retrieval Fixes (v1.21)
 - First public-benchmark number: `benchmarks/longmemeval/` runs the retrieval half of LongMemEval-S (500 questions, zero-model, session-level recall) and an ablation. v1.20 scored 70.2 % R@5-all against an 86.6 % embedder ceiling; the gap was two pieces.
 - Same-day cap counts (day, `entity`) — unrelated conversations stored on one day no longer share a quota; rows without an entity keep per-day behaviour.
-- Keyword lane scores by matched tokens (`keyword_score_base − 0.45·matched/total`; base 0.95 since v1.23, 0.65 in v1.21–v1.22), needs two content tokens (or the only one), and the tokenizer drops function words (`db.keyword_stopwords`).
+- Keyword lane scores by matched tokens (`keyword_score_base − 0.45·matched/total`; base 0.95 since v1.23, 0.65 in v1.21–v1.22), needs two content tokens (or the only one), and the tokenizer drops function words (`db.keyword_stopwords`). Since v1.27 a CJK token with a locative/plural suffix (家 / 们 / 里 / 那边 …) also tries its root — 「姥姥家」 matches rows that only say 「姥姥」 — and the root shares the surface word's concept group, so `total` counts groups and the expansion cannot dilute the score.
 - **v1.24**: optional reranker hook — `mem.reranker = lambda query, texts: scores` re-sorts the top `rerank_pool` (default 30) allocated rows by an external cross-encoder, then cuts to `n_results`. Off by default; it never adds or filters rows. On LongMemEval-S with a 114M multilingual cross-encoder over the top-60 it took the default lane from 436 to 455/500 (temporal questions 98 → 114). Details: [v1.24 release notes](docs/release-notes/v1.24.0.md).
 - **v1.23**: with base 0.95 a full literal match ranks like a vector hit at distance 0.50 — behind strong semantic hits, ahead of weak ones. On LongMemEval-S that took the default lane from 403/500 to 436/500 against the bare embedder's 433; the same-day cap was measured as inert and left as is. Details and the per-class table: [v1.23 release notes](docs/release-notes/v1.23.0.md).
 - [中文说明](docs/release-notes/v1.21.0_zh.md) · [English release notes](docs/release-notes/v1.21.0.md).
@@ -554,7 +556,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.26.0](docs/release-notes/v1.26.0_zh.md) · [English](docs/release-notes/v1.26.0.md) — FTS5 pre-filter for the keyword lane, batched reads in search, proxy fixes (images kept, work off the event loop, dead-letter for bad curator JSON). Previous: [v1.25.0](docs/release-notes/v1.25.0_zh.md) · [English](docs/release-notes/v1.25.0.md)
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.27.0](docs/release-notes/v1.27.0_zh.md) · [English](docs/release-notes/v1.27.0.md) — host side-requests pass through, CJK root variants in the keyword lane, curator never invents relationships, opt-in same-scene merge. Previous: [v1.26.0](docs/release-notes/v1.26.0_zh.md) · [English](docs/release-notes/v1.26.0.md)
 
 ## Origin
 

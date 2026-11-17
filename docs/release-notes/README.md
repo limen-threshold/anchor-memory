@@ -4,6 +4,7 @@
 
 Most recent first. Each note follows the same shape: what changed, why it matters, what to do about it.
 
+- [v1.27.0 中文](v1.27.0_zh.md) · [English](v1.27.0.md) — 2026-11-16 · 从家里港四件：宿主旁路请求直通、中文词根变体进关键词车道、策展员不编关系、可选同场并入
 - [v1.26.0 中文](v1.26.0_zh.md) · [English](v1.26.0.md) — 2026-11-16 · 关键词车道 FTS5 预筛（LIKE 兜底、可关）、搜索批量读数、代理：图片不丢 / 模型调用出事件循环 / 坏 JSON 落死信不整轮丢
 - [v1.25.0 中文](v1.25.0_zh.md) · [English](v1.25.0.md) — 2026-11-14 · 一次外部审读，修掉四处静默失效：时钟基准、stdio 里的 print、关键词车道先截后打分、gpt-5 参数；带时区戳不炸 search、更新不当重复、梦程序不加引用、requirements 补齐
 - [v1.24.0 中文](v1.24.0_zh.md) · [English](v1.24.0.md) — 可选的重排器钩子（默认关）
