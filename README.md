@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.32.0：邮差。** AI 自己的信箱（`anchor_courier.py`，IMAP 收、SMTP 发，零模型）。四条规矩：收信只登记；名册里的人写的信它才看得到，陌生人的先扣下等你 `--know`；来信不自动起草，它只看到一行「几封没回」；`write_reply` 只存草稿，**只有你在命令行 `--send` 才真的发**，状态行如实写「实际已发」。没配邮箱则整件不存在。[中文说明](docs/release-notes/v1.32.0_zh.md) · [English](docs/release-notes/v1.32.0.md)。
+
 > **v1.31.0：小本本。** 四样零模型的件：速记本（`memo_jot` 只能追加一行、机器盖日期、同时存成记忆；没划掉的老账会在 wakeup 和心跳前被递回来）、永久语录（`keep_quote`，单独一册进 pinned 层，状态怎么重写都丢不了）、失败记录（`log_failure`，只追加、从不改写记忆，七种类型）、状态文件读数（上次重写几天前、哪些行的「明天」已经过去）。另加一道闸：把系统提示贴回自己文件的写入会被拒。[中文说明](docs/release-notes/v1.31.0_zh.md) · [English](docs/release-notes/v1.31.0.md)。
 
 > **v1.30.0：小鸟衔报、它自己的房间、按日看的本地页。** `anchor_newspaper.py` 按 AI 自己写的兴趣文件出门衔报（arXiv / 大都会博物馆 / 任意 RSS，全网搜索可选；每条盖来源+发表日期+衔回日期；没模型也能飞）。房间是 `anchor_presence` 的第三种拍（`--room-every`）：最新一份报纸和它自己上一句挂在门牌下，能退席，对话中自动让路。`anchor_hub.py` 零模型出一页：按日翻心跳、房间、日记、报纸；私匣和闹钟的 why 从不显示，它用 `<!-- private -->` 包起来的段落只留一行锁牌。[中文说明](docs/release-notes/v1.30.0_zh.md) · [English](docs/release-notes/v1.30.0.md)。
@@ -304,6 +306,7 @@ Restart Claude Code. Your AI now has these tools:
 - `comment` — leave a comment under a memory (turns memories into dialogue spaces)
 - `graph_stats` — graph-level health
 - `write_journal` / `list_journal` / `read_journal` — the AI's daily journal (v1.29; also written on the presence journal turn)
+- `list_letters` / `read_letter` / `write_reply` / `set_letter_aside` — the AI's mailbox (v1.32; only when `ANCHOR_MAIL_ADDRESS`/`ANCHOR_MAIL_PASSWORD` are set). Replies are drafts; only `anchor_courier.py --send` sends
 - `memo_jot` / `memo_edit` / `read_memo` — a memo for things promised (v1.31): append-only dated lines, also stored as memories, handed back in wakeup while open
 - `keep_quote` — append a sentence to `permanent_quotes.md` in the pinned layer (v1.31)
 - `log_failure` / `list_failures` — append-only log of memory failures the AI caught, seven types (v1.31)
@@ -570,7 +573,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.31.0](docs/release-notes/v1.31.0_zh.md) · [English](docs/release-notes/v1.31.0.md) — the small books: memo, permanent quotes, failure log, session-state readout (anchor_notebook, zero-model). Previous: [v1.30.0](docs/release-notes/v1.30.0_zh.md) · [English](docs/release-notes/v1.30.0.md)
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.32.0](docs/release-notes/v1.32.0_zh.md) · [English](docs/release-notes/v1.32.0.md) — the courier: the AI's own mailbox, a roster at the door, drafts only, a person sends (anchor_courier). Previous: [v1.31.0](docs/release-notes/v1.31.0_zh.md) · [English](docs/release-notes/v1.31.0.md)
 
 ## Origin
 

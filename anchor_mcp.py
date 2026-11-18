@@ -38,6 +38,7 @@ import anchor_vault
 import anchor_journal
 import anchor_newspaper
 import anchor_notebook
+import anchor_courier
 import anchor_invite
 
 
@@ -453,6 +454,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
         *anchor_journal.TOOL_DEFS,   # v1.29: write/list/read_journal (zero-model; any host can keep a journal)
         *anchor_newspaper.TOOL_DEFS,   # v1.30: list/read_newspaper, read/write_interests (the bird itself is anchor_newspaper.py --fly)
         *anchor_notebook.TOOL_DEFS,   # v1.31: memo_jot / memo_edit / read_memo, keep_quote, log_failure / list_failures
+        *(anchor_courier.TOOL_DEFS if anchor_courier.enabled() else []),   # v1.32: only when a mailbox is configured
         {
             "name": "write_session_state",
             "description": "Write your session_state.md — your own rolling state that carries across windows (what's ongoing, decisions made, current threads, mood). This is the ONLY correct way to update it: the current version is archived automatically before the new one is written, and a continuity header is added so future windows read it as their own state, not a message from someone else. Write the COMPLETE current state (not a diff), in first person. Update it when things change materially and when a conversation wraps up.",
@@ -766,6 +768,12 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
                     result["vault"] = anchor_vault.status_line(db_path)
                 except Exception:
                     pass
+                try:   # v1.32: letters unanswered / drafts waiting / what was actually sent — only when mail is configured
+                    ml = anchor_courier.status_line(db_path)
+                    if ml:
+                        result["mail"] = ml
+                except Exception:
+                    pass
                 try:   # v1.31: age of the session state, lines whose "tomorrow" has passed, open memo lines — facts only
                     nb = anchor_notebook.status(db_path, pinned_dir)
                     if nb:
@@ -821,6 +829,11 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
             elif name in anchor_newspaper.TOOL_NAMES:   # v1.30: the newspaper basket and the interest file
                 return anchor_newspaper.handle(db_path, name, args)
 
+            elif name in anchor_courier.TOOL_NAMES:   # v1.32: the mailbox; drafts only — sending is the person's command line
+                if not anchor_courier.enabled():
+                    return {"error": "mail is not configured on this machine"}
+                return anchor_courier.handle(db_path, name, args)
+
             elif name in anchor_notebook.TOOL_NAMES:   # v1.31: memo, permanent quotes, failure log
                 def _memo_store(text):
                     mid = f"memo_{uuid.uuid4().hex[:8]}"
@@ -872,7 +885,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.31.0"
+SERVER_VERSION = "1.32.0"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).
@@ -1148,7 +1161,7 @@ def format_wakeup_text(data: dict) -> str:
     file_section("Previous window (mechanical tail)", data.get("last_session"))
     file_section("Recent timeline", data.get("recent_timeline"))
     file_section("Your notebook (readout)", data.get("notebook"))   # v1.31
-    notes = [str(data[k]) for k in ("vault", "newspaper") if data.get(k)]   # v1.28 / v1.30 lines reach hook-injected windows too
+    notes = [str(data[k]) for k in ("vault", "newspaper", "mail") if data.get(k)]   # v1.28 / v1.30 lines reach hook-injected windows too
     file_section("Also", "\n".join(notes))
 
     def section(title, items, fmt):
@@ -1213,7 +1226,8 @@ if __name__ == "__main__":
         _attach_pinned_layer(data, pinned)
         for key, fn in (("vault", lambda: anchor_vault.status_line(args.db_path)),          # v1.31: the hook path gets the
                         ("newspaper", lambda: anchor_newspaper.status_line(args.db_path)),   # same status lines as the tool
-                        ("notebook", lambda: anchor_notebook.status(args.db_path, pinned))):
+                        ("notebook", lambda: anchor_notebook.status(args.db_path, pinned)),
+                        ("mail", lambda: anchor_courier.status_line(args.db_path))):
             try:
                 val = fn()
                 if val:

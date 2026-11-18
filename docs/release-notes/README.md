@@ -4,6 +4,7 @@
 
 Most recent first. Each note follows the same shape: what changed, why it matters, what to do about it.
 
+- [v1.32.0 中文](v1.32.0_zh.md) · [English](v1.32.0.md) — 2026-11-17 · 邮差：AI 自己的信箱；名册闸、来信不自动起草、回信只存草稿、只有人能发；没配邮箱整件不存在
 - [v1.31.0 中文](v1.31.0_zh.md) · [English](v1.31.0.md) — 2026-11-17 · 小本本四样（零模型）：速记本、永久语录、失败记录、状态文件读数；拒写「贴回来的提示」
 - [v1.30.0 中文](v1.30.0_zh.md) · [English](v1.30.0.md) — 2026-11-17 · 小鸟衔报（按 AI 自己的兴趣文件，没模型也能飞）、房间（看报/想事/和自己说话的一拍，能退席、会让路）、anchor_hub 按日本地页（私匣与 private 段不显示）
 - [v1.29.0 中文](v1.29.0_zh.md) · [English](v1.29.0.md) — 2026-11-16 · 它自己的时间：心跳（anchor_presence）、日记、闹钟，骨架 anchor_agent 对任何会函数调用的上游跑带工具的一拍；BYO 模型，没配就不跑

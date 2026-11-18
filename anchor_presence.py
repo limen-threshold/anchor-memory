@@ -40,6 +40,7 @@ sys.path.insert(0, HERE)
 
 import anchor_agent  # noqa: E402
 import anchor_alarms  # noqa: E402
+import anchor_courier  # noqa: E402
 import anchor_journal  # noqa: E402
 import anchor_newspaper  # noqa: E402
 import anchor_notebook  # noqa: E402
@@ -50,6 +51,7 @@ PRESENCE_TOOLS = (
     "write_session_state", "list_identity_files", "read_identity_file", "write_identity_file",
     "vault_write", "vault_read", "write_journal", "list_journal", "read_journal",
     "memo_jot", "memo_edit", "read_memo", "keep_quote", "log_failure", "list_failures",   # v1.31 (served by the MCP handler)
+    "list_letters", "read_letter", "write_reply", "set_letter_aside",   # v1.32 (present only when a mailbox is configured)
 )
 
 
@@ -224,8 +226,8 @@ class Presence:
                       + list(anchor_newspaper.TOOL_DEFS))
 
     def _exec(self, name: str, args: dict):
-        if name in ("write_session_state", "write_identity_file", "write_journal", "store_memory", "keep_quote", "memo_jot"):
-            body = " ".join(str((args or {}).get(k) or "") for k in ("content", "text", "quote"))
+        if name in ("write_session_state", "write_identity_file", "write_journal", "store_memory", "keep_quote", "memo_jot", "write_reply"):
+            body = " ".join(str((args or {}).get(k) or "") for k in ("content", "text", "quote", "body"))
             if any(m in body for m in SIGN_MARKS):   # v1.31: the door sign pasted into the AI's own files
                 return ("Not written: the text contains this turn's door sign (the machine's description of the turn). "
                         "Write only your own words.")
@@ -281,6 +283,9 @@ class Presence:
             bird = anchor_newspaper.status_line(self.db_path)
             if bird and bird not in parts[-1]:
                 parts.append(bird)
+            mail = anchor_courier.status_line(self.db_path, now)   # v1.32
+            if mail:
+                parts.append(mail)
             prev = last_heartbeat(self.db_path)
             if prev:
                 parts.append("Your previous heartbeat, verbatim:\n" + prev)
@@ -369,7 +374,27 @@ def paper_tick(db_path: str, now: datetime, paper_at: list, st: dict, fly=None) 
     return out
 
 
-def run_loop(p: Presence, times: list, every_min: int, quiet, journal_at, poll_sec: int = 60, paper_at: list = None):
+def mail_tick(db_path: str, now: datetime, every_min: int, st: dict, scan=None) -> dict:
+    """Scan the mailbox every N minutes (no model). Returns the scan result, or {} when it is not time."""
+    if not every_min or not anchor_courier.enabled():
+        return {}
+    last = st.get("last_mail_scan_at")
+    if last and (now - datetime.fromisoformat(last)) < timedelta(minutes=every_min):
+        return {}
+    st2 = load_state(db_path); st2["last_mail_scan_at"] = now.isoformat(timespec="minutes"); save_state(db_path, st2)
+    try:
+        r = (scan or anchor_courier.scan)(db_path)
+    except Exception as e:
+        log_line(db_path, {"kind": "mail", "error": f"{type(e).__name__}: {e}"})
+        return {}
+    if r.get("new") or r.get("errors") or r.get("error"):
+        log_line(db_path, {"kind": "mail", "new": len(r.get("new") or []), "unanswered": r.get("unanswered", 0),
+                           "held": r.get("held", 0), **({"error": r.get("error") or f"{r['errors']} message(s) unreadable"} if r.get("error") or r.get("errors") else {})})
+    return r
+
+
+def run_loop(p: Presence, times: list, every_min: int, quiet, journal_at, poll_sec: int = 60, paper_at: list = None,
+             mail_every: int = 0):
     print(f"[presence] running: times={times or '-'} every={every_min or '-'} quiet={quiet} journal_at={journal_at} "
           f"room_every={p.room_every or '-'} paper_at={paper_at or '-'}", flush=True)
     while True:
@@ -379,6 +404,9 @@ def run_loop(p: Presence, times: list, every_min: int, quiet, journal_at, poll_s
             if paper_at:
                 for r in paper_tick(p.db_path, now, paper_at, st):
                     print(f"[presence] newspaper: {r.get('path') or r.get('note')}", flush=True)
+            mr = mail_tick(p.db_path, now, mail_every, st)
+            if mr.get("new"):
+                print(f"[presence] mail: {len(mr['new'])} new ({mr.get('unanswered', 0)} for the AI, {mr.get('held', 0)} held)", flush=True)
             if not is_quiet(now, quiet):
                 for a in anchor_alarms.due(p.db_path, now):
                     print(f"[presence] alarm {a['id']} rings", flush=True)
@@ -439,6 +467,7 @@ def main():
     ap.add_argument("--idle-min", type=int, default=20, help="the room waits while the transcript has a line this recent")
     ap.add_argument("--room-store", action="store_true", help="also store each room line as a memory (tag: room)")
     ap.add_argument("--paper-at", default="", help="send the bird at these times, e.g. 06:00,18:00 (no model needed)")
+    ap.add_argument("--mail-every", type=int, default=0, help="scan the mailbox every N minutes (needs ANCHOR_MAIL_*; no model)")
     ap.add_argument("--once", choices=["heartbeat", "journal", "room", "paper"], help="run one turn now and exit")
     ap.add_argument("--dry", action="store_true", help="with --once: print the prompt, call nothing")
     ap.add_argument("--max-turns", type=int, default=8)
@@ -467,10 +496,10 @@ def main():
             print(json.dumps({k: v for k, v in res.items() if k != "trace"}, ensure_ascii=False, indent=1))
             print(f"tools called: {[t['tool'] for t in res['trace']]}")
         return
-    if not times and not args.every and not journal_at and not args.room_every and not paper_at:
-        print("give --times or --every (and/or --journal-at, --room-every, --paper-at), or --once", file=sys.stderr)
+    if not times and not args.every and not journal_at and not args.room_every and not paper_at and not args.mail_every:
+        print("give --times or --every (and/or --journal-at, --room-every, --paper-at, --mail-every), or --once", file=sys.stderr)
         sys.exit(2)
-    run_loop(p, times, args.every, parse_quiet(args.quiet), journal_at, paper_at=paper_at)
+    run_loop(p, times, args.every, parse_quiet(args.quiet), journal_at, paper_at=paper_at, mail_every=args.mail_every)
 
 
 if __name__ == "__main__":
