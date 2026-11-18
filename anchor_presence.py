@@ -42,13 +42,21 @@ import anchor_agent  # noqa: E402
 import anchor_alarms  # noqa: E402
 import anchor_journal  # noqa: E402
 import anchor_newspaper  # noqa: E402
+import anchor_notebook  # noqa: E402
 import anchor_room  # noqa: E402
 
 PRESENCE_TOOLS = (
     "search_memory", "store_memory", "read_memories_by_date", "search_transcript",
     "write_session_state", "list_identity_files", "read_identity_file", "write_identity_file",
     "vault_write", "vault_read", "write_journal", "list_journal", "read_journal",
+    "memo_jot", "memo_edit", "read_memo", "keep_quote", "log_failure", "list_failures",   # v1.31 (served by the MCP handler)
 )
+
+
+# sentences that occur only in the door signs — if one shows up in something the AI writes to its files,
+# the prompt was pasted back (small local models do this), and the write is refused with the reason
+SIGN_MARKS = ("time of your own, nobody waiting, no task", "This is your journal turn.",
+              "Nobody is waiting and there is no task.")
 
 
 # ── schedule ──────────────────────────────────────────────────────────────────
@@ -216,6 +224,11 @@ class Presence:
                       + list(anchor_newspaper.TOOL_DEFS))
 
     def _exec(self, name: str, args: dict):
+        if name in ("write_session_state", "write_identity_file", "write_journal", "store_memory", "keep_quote", "memo_jot"):
+            body = " ".join(str((args or {}).get(k) or "") for k in ("content", "text", "quote"))
+            if any(m in body for m in SIGN_MARKS):   # v1.31: the door sign pasted into the AI's own files
+                return ("Not written: the text contains this turn's door sign (the machine's description of the turn). "
+                        "Write only your own words.")
         if name == "alarm_clock":   # v1.30: remembers which kind of beat set it, and rings there
             return anchor_alarms.execute(self.db_path, args, where="room" if self._kind == "room" else "")
         if name in anchor_journal.TOOL_NAMES:
@@ -255,6 +268,10 @@ class Presence:
         missed = "" if dry else anchor_alarms.missed_block(self.db_path)   # told once — a dry run must not use it up
         if missed:
             parts.append(missed)
+        if kind != "room":   # v1.31: the notebook handed back — state age, lines whose "tomorrow" has passed, open memo lines
+            nb = anchor_notebook.status(self.db_path, self.pinned_dir, now)
+            if nb:
+                parts.append(nb)
         if kind == "room":
             pass   # the time line only: anything else in the user slot reads as someone speaking
         elif kind == "journal":

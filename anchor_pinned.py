@@ -140,6 +140,13 @@ def write_session_state(pinned_dir: str, content: str) -> str:
     content = (content or "").strip()
     if not content:
         raise ValueError("refusing to write an empty session_state — provide the full new state")
+    # v1.31: the header anywhere but at the very top means the injected layer was pasted back in (seen with small
+    # local models: identity files, the old state and the turn's instructions, all written into the state).
+    if CONTINUITY_HEADER in content[len(CONTINUITY_HEADER):] or (
+            CONTINUITY_HEADER in content and not content.startswith(CONTINUITY_HEADER)):
+        raise ValueError("not written: this contains the '[continuity] …' header in the middle of the text, which means "
+                         "the injected layer (files shown to you at the top of the window) was pasted back in. Write "
+                         "only your own current state — the header is added for you.")
     if not content.startswith(CONTINUITY_HEADER):
         content = f"{CONTINUITY_HEADER}\n\n{content}"
 
