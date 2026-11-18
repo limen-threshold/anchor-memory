@@ -103,7 +103,7 @@ def pending(db_path: str) -> list:
     return [a for a in _load(db_path) if a.get("status") == "pending"]
 
 
-def set_alarm(db_path: str, at: str = "", why: str = "", in_minutes=None, now: datetime = None) -> str:
+def set_alarm(db_path: str, at: str = "", why: str = "", in_minutes=None, now: datetime = None, where: str = "") -> str:
     now = now or datetime.now()
     why = " ".join((why or "").split())
     if not why:
@@ -132,7 +132,8 @@ def set_alarm(db_path: str, at: str = "", why: str = "", in_minutes=None, now: d
         return f"Already {MAX_FIRES_PER_DAY} rings on {day}; pick another day."
     aid = "al_" + uuid.uuid4().hex[:6]
     alarms.append({"id": aid, "at": when.isoformat(timespec="minutes"), "why": why[:WHY_MAX],
-                   "set_at": now.isoformat(timespec="minutes"), "status": "pending"})
+                   "set_at": now.isoformat(timespec="minutes"), "status": "pending",
+                   **({"where": where} if where else {})})   # v1.30: an alarm set in the room rings in the room
     _save(db_path, alarms)
     return f"Set: {when.strftime('%Y-%m-%d %H:%M')} ({aid}). When it rings you will see your note."
 
@@ -166,10 +167,10 @@ def cancel_alarm(db_path: str, aid: str) -> str:
     return f"No waiting alarm with id {aid}."
 
 
-def execute(db_path: str, args: dict, now: datetime = None) -> str:
+def execute(db_path: str, args: dict, now: datetime = None, where: str = "") -> str:
     act = str((args or {}).get("action") or "").strip().lower()
     if act == "set":
-        return set_alarm(db_path, args.get("at", ""), args.get("why", ""), args.get("in_minutes"), now)
+        return set_alarm(db_path, args.get("at", ""), args.get("why", ""), args.get("in_minutes"), now, where)
     if act == "list":
         return list_alarms(db_path, now)
     if act == "cancel":

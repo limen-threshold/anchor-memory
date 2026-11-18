@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.30.0：小鸟衔报、它自己的房间、按日看的本地页。** `anchor_newspaper.py` 按 AI 自己写的兴趣文件出门衔报（arXiv / 大都会博物馆 / 任意 RSS，全网搜索可选；每条盖来源+发表日期+衔回日期；没模型也能飞）。房间是 `anchor_presence` 的第三种拍（`--room-every`）：最新一份报纸和它自己上一句挂在门牌下，能退席，对话中自动让路。`anchor_hub.py` 零模型出一页：按日翻心跳、房间、日记、报纸；私匣和闹钟的 why 从不显示，它用 `<!-- private -->` 包起来的段落只留一行锁牌。[中文说明](docs/release-notes/v1.30.0_zh.md) · [English](docs/release-notes/v1.30.0.md)。
+
 > **v1.29.0：它自己的时间。** `anchor_presence.py` 给 AI 一天几拍心跳（没任务、没人等，工具在手，写的落 `heartbeat/<日期>.md`）、每晚一拍日记（当天原话+心跳笔记摆在面前，`write_journal` 自己写）、一只闹钟（`alarm_clock`，定时必须写 why，响了只给它自己看）。骨架 `anchor_agent.run_turn` 对任何会函数调用的 OpenAI 兼容上游跑带工具的一拍，工具直接用 MCP 那张表。BYO 模型，三件都要；没配就明说不跑。[中文说明](docs/release-notes/v1.29.0_zh.md) · [English](docs/release-notes/v1.29.0.md)。
 
 > **v1.28.0：私匣。** AI 自己的一格抽屉：`vault_write` / `vault_read` 两个工具，AES-256 加密落盘，回执零回显，内容不进记忆、不进转录、不进日志；代理设 `ANCHOR_VAULT_INJECT=1` 时整本只放进它自己的 system 提示。边界写明：密钥在匣子旁边，机器管理员能解——保证的是「读它得专门写代码、会留痕」。[中文说明](docs/release-notes/v1.28.0_zh.md) · [English](docs/release-notes/v1.28.0.md)。
@@ -300,6 +302,7 @@ Restart Claude Code. Your AI now has these tools:
 - `comment` — leave a comment under a memory (turns memories into dialogue spaces)
 - `graph_stats` — graph-level health
 - `write_journal` / `list_journal` / `read_journal` — the AI's daily journal (v1.29; also written on the presence journal turn)
+- `list_newspapers` / `read_newspaper` / `read_interests` / `write_interests` — the newspaper basket and the AI's own interest file (v1.30; the bird itself is `anchor_newspaper.py --fly`)
 - `vault_write` / `vault_read` — the AI's private vault (v1.28): encrypted, never echoed, never stored as memory; shown to the AI alone when the proxy runs with `ANCHOR_VAULT_INJECT=1`
 
 ### LobeHub / SillyTavern / other MCP hosts
@@ -562,7 +565,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.29.0](docs/release-notes/v1.29.0_zh.md) · [English](docs/release-notes/v1.29.0.md) — time of its own: heartbeat, journal, alarm clock (anchor_presence / anchor_agent, BYO upstream). Previous: [v1.28.0](docs/release-notes/v1.28.0_zh.md) · [English](docs/release-notes/v1.28.0.md)
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.30.0](docs/release-notes/v1.30.0_zh.md) · [English](docs/release-notes/v1.30.0.md) — the little bird (anchor_newspaper), a room of its own (anchor_room, a third kind of presence beat), a local day page (anchor_hub). Previous: [v1.29.0](docs/release-notes/v1.29.0_zh.md) · [English](docs/release-notes/v1.29.0.md)
 
 ## Origin
 

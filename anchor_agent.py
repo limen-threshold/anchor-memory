@@ -87,8 +87,12 @@ def _tool_result_text(res) -> str:
 
 
 def run_turn(upstream: Upstream, system: str, user: str, tools: list, tool_exec,
-             max_turns: int = 8, temperature: float = None, max_tool_result_chars: int = 6000) -> dict:
-    """One autonomous turn. Returns {"text": final text, "trace": [...], "turns": n, "stopped": reason}."""
+             max_turns: int = 8, temperature: float = None, max_tool_result_chars: int = 6000,
+             stop_tools=()) -> dict:
+    """One autonomous turn. Returns {"text": final text, "trace": [...], "turns": n, "stopped": reason}.
+
+    ``stop_tools`` (v1.30): tool names that end the turn when called (a "leave" tool). The call is traced,
+    never executed, and no further request is made; text written before it is kept. stopped = "left"."""
     oai_tools = mcp_tools_to_openai(tools)
     messages = []
     if system:
@@ -110,6 +114,7 @@ def run_turn(upstream: Upstream, system: str, user: str, tools: list, tool_exec,
         if not calls:
             break
         messages.append({"role": "assistant", "content": content or "", "tool_calls": calls})
+        left = False
         for c in calls:
             fn = (c.get("function") or {})
             name = fn.get("name", "")
@@ -119,6 +124,10 @@ def run_turn(upstream: Upstream, system: str, user: str, tools: list, tool_exec,
             except Exception:
                 args = {"_raw": raw_args}
             started = datetime.now().isoformat(timespec="seconds")
+            if name in stop_tools:
+                left = True
+                trace.append({"at": started, "tool": name, "args": args, "ok": True, "result_preview": "left"})
+                continue
             try:
                 res = tool_exec(name, args)
                 ok = True
@@ -129,6 +138,9 @@ def run_turn(upstream: Upstream, system: str, user: str, tools: list, tool_exec,
                 text = text[:max_tool_result_chars] + f"\n…[{len(text) - max_tool_result_chars} more chars cut]"
             trace.append({"at": started, "tool": name, "args": args, "ok": ok, "result_preview": text[:200]})
             messages.append({"role": "tool", "tool_call_id": c.get("id") or f"call_{turn}_{name}", "content": text})
+        if left:
+            stopped = "left"
+            break
         if turn == max_turns:
             stopped = "max_turns"
     return {"text": "\n\n".join(texts).strip(), "trace": trace, "turns": turn, "stopped": stopped}

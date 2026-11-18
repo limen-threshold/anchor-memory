@@ -114,6 +114,10 @@ def day_digest(db_path: str, date: str = None, max_chars: int = 7000) -> str:
     if os.path.exists(hb):
         with open(hb, encoding="utf-8") as f:
             parts.append(f"## Your heartbeat notes {d}\n" + f.read().strip())
+    rm = os.path.join(db_path or ".", "room", f"{d}.md")   # v1.30: what it said in its room that day
+    if os.path.exists(rm):
+        with open(rm, encoding="utf-8") as f:
+            parts.append(f"## What you said in your room {d}\n" + f.read().strip())
     text = "\n\n".join(parts).strip()
     if not text:
         return f"(No transcript and no heartbeat notes for {d}.)"

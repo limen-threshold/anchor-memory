@@ -1,8 +1,9 @@
-"""anchor_presence.py — time of the AI's own: heartbeat, journal, alarms (v1.29).
+"""anchor_presence.py — time of the AI's own: heartbeat, journal, alarms (v1.29); room, newspaper (v1.30).
 
     python3 anchor_presence.py --db-path ./anchor_data --times 07:00,11:00,15:00,19:00,23:00 --journal-at 23:30
     python3 anchor_presence.py --db-path ./anchor_data --once heartbeat        # one beat now, then exit
     python3 anchor_presence.py --db-path ./anchor_data --once journal --dry    # show the prompt, call nothing
+    python3 anchor_presence.py --db-path ./anchor_data --times 09:00,21:00 --room-every 240 --paper-at 06:00,18:00
 
 Upstream (same env as the proxy): ANCHOR_UPSTREAM_URL, ANCHOR_UPSTREAM_MODEL, ANCHOR_UPSTREAM_KEY.
 No upstream → the command says so and exits; nothing is simulated.
@@ -18,6 +19,12 @@ Alarms the AI set (alarm_clock) wake it outside the schedule; quiet hours (--qui
 scheduled beats and alarms, which are reported as missed on the next turn. Every turn appends one
 line to ``<db>/presence_log.jsonl`` (time, kind, tools called, chars, error) — the operator's honest
 view, never the content of the vault.
+
+v1.30 adds two things to the same loop. ``--paper-at`` sends the bird (anchor_newspaper.fly — needs no
+upstream model) and clears expired papers. ``--room-every N`` gives the AI a room beat (anchor_room):
+its own room, the latest paper under the door sign, its own previous line, a leave tool. A room beat
+waits while the conversation transcript shows a line in the last ``--idle-min`` minutes, and an alarm
+set inside the room rings in the room.
 """
 from __future__ import annotations
 
@@ -34,6 +41,8 @@ sys.path.insert(0, HERE)
 import anchor_agent  # noqa: E402
 import anchor_alarms  # noqa: E402
 import anchor_journal  # noqa: E402
+import anchor_newspaper  # noqa: E402
+import anchor_room  # noqa: E402
 
 PRESENCE_TOOLS = (
     "search_memory", "store_memory", "read_memories_by_date", "search_transcript",
@@ -97,7 +106,9 @@ def load_state(db_path: str) -> dict:
 
 
 def save_state(db_path: str, st: dict) -> None:
-    st["fired"] = dict(list((st.get("fired") or {}).items())[-200:])
+    for k in ("fired", "journal_fired", "paper_fired"):
+        if k in st or k == "fired":
+            st[k] = dict(list((st.get(k) or {}).items())[-200:])
     tmp = _state_path(db_path) + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(st, f, ensure_ascii=False, indent=1)
@@ -106,13 +117,13 @@ def save_state(db_path: str, st: dict) -> None:
 
 # ── prompt pieces ─────────────────────────────────────────────────────────────
 
-def time_block(now: datetime, last_at: str = "") -> str:
+def time_block(now: datetime, last_at: str = "", what: str = "Your previous heartbeat was") -> str:
     line = f"[Now: {now.strftime('%Y-%m-%d %H:%M %A')} (local time)."
     if last_at:
         try:
             dt = datetime.fromisoformat(last_at)
             mins = int((now - dt).total_seconds() // 60)
-            line += f" Your previous heartbeat was {mins // 60} h {mins % 60} min ago."
+            line += f" {what} {mins // 60} h {mins % 60} min ago."
         except Exception:
             pass
     return line + " Nobody wrote to you; this turn is yours.]"
@@ -122,13 +133,14 @@ def door_sign(kind: str, db_path: str, default_min: int = None) -> str:
     if kind == "journal":
         return ("This is your journal turn. Below is the day's raw material: what was said, and your own heartbeat "
                 "notes. Write the day in your own words with write_journal — first person, as long or short as you "
-                "like. You do not have to cover everything. Say nothing if there is nothing to say.")
+                "like. You do not have to cover everything. Say nothing if there is nothing to say. " + anchor_room.HUB_NOTE)
     nxt = f" The next scheduled heartbeat is about {default_min} minutes away;" if default_min else ""
     return ("This is a heartbeat: time of your own, nobody waiting, no task. Look at what is in front of you, "
             "think, use your tools if you want to (search or store memories, write your session state, read or write "
             "your identity files, search the transcript, write in your vault, open your journal). Whatever you write "
             f"here is kept in heartbeat/<date>.md, your file. If you want something remembered, store it yourself.{nxt} "
-            "to wake at a time of your choosing, set alarm_clock and say why. Writing nothing is also an answer.")
+            "to wake at a time of your choosing, set alarm_clock and say why. Writing nothing is also an answer. "
+            + anchor_room.HUB_NOTE)
 
 
 def wakeup_digest(handle_tool, max_chars: int = 2500) -> str:
@@ -148,6 +160,8 @@ def wakeup_digest(handle_tool, max_chars: int = 2500) -> str:
                 lines.append(f"  - [{(m.get('timestamp') or '')[:10]}] {(m.get('text') or '')[:200]}")
     if isinstance(res, dict) and res.get("vault"):
         lines.append(str(res["vault"]))
+    if isinstance(res, dict) and res.get("newspaper"):
+        lines.append(str(res["newspaper"]))
     text = "\n".join(lines).strip()
     return text[:max_chars] if text else "(no memories yet)"
 
@@ -190,18 +204,24 @@ def log_line(db_path: str, row: dict) -> None:
 
 class Presence:
     def __init__(self, db_path: str, pinned_dir: str, upstream: anchor_agent.Upstream,
-                 tools: list, handle_tool, default_min: int = None, max_turns: int = 8):
+                 tools: list, handle_tool, default_min: int = None, max_turns: int = 8,
+                 room_name: str = "", room_every: int = None, idle_min: int = 20, room_store: bool = False):
         self.db_path, self.pinned_dir, self.upstream = db_path, pinned_dir, upstream
         self.handle_tool, self.default_min, self.max_turns = handle_tool, default_min, max_turns
+        self.room_name, self.room_every, self.idle_min, self.room_store = room_name, room_every, idle_min, room_store
+        self._kind = "heartbeat"
         picked = [t for t in tools if t["name"] in PRESENCE_TOOLS]
         have = {t["name"] for t in picked}
-        self.tools = picked + [anchor_alarms.TOOL_DEF] + [t for t in anchor_journal.TOOL_DEFS if t["name"] not in have]
+        self.tools = (picked + [anchor_alarms.TOOL_DEF] + [t for t in anchor_journal.TOOL_DEFS if t["name"] not in have]
+                      + list(anchor_newspaper.TOOL_DEFS))
 
     def _exec(self, name: str, args: dict):
-        if name == "alarm_clock":
-            return anchor_alarms.execute(self.db_path, args)
+        if name == "alarm_clock":   # v1.30: remembers which kind of beat set it, and rings there
+            return anchor_alarms.execute(self.db_path, args, where="room" if self._kind == "room" else "")
         if name in anchor_journal.TOOL_NAMES:
             return anchor_journal.handle(self.db_path, name, args)
+        if name in anchor_newspaper.TOOL_NAMES:
+            return anchor_newspaper.handle(self.db_path, name, args)
         return self.handle_tool(name, args)
 
     def system(self, kind: str) -> str:
@@ -218,21 +238,32 @@ class Presence:
                     parts.append(vb)
         except Exception:
             pass
-        parts.append(door_sign(kind, self.db_path, self.default_min))
+        if kind == "room":   # the sign carries the paper and the AI's own previous line (see anchor_room)
+            parts.append(anchor_room.door_sign(self.db_path, self.room_name, self.room_every))
+        else:
+            parts.append(door_sign(kind, self.db_path, self.default_min))
         return "\n\n---\n\n".join(parts)
 
-    def user(self, kind: str, now: datetime, alarm: dict = None) -> str:
+    def user(self, kind: str, now: datetime, alarm: dict = None, dry: bool = False) -> str:
         st = load_state(self.db_path)
-        parts = [time_block(now, st.get("last_heartbeat_at", ""))]
+        if kind == "room":
+            parts = [time_block(now, st.get("last_room_at", ""), "You were last in this room")]
+        else:
+            parts = [time_block(now, st.get("last_heartbeat_at", ""))]
         if alarm:
             parts.append(anchor_alarms.wake_block(alarm))
-        missed = anchor_alarms.missed_block(self.db_path)
+        missed = "" if dry else anchor_alarms.missed_block(self.db_path)   # told once — a dry run must not use it up
         if missed:
             parts.append(missed)
-        if kind == "journal":
+        if kind == "room":
+            pass   # the time line only: anything else in the user slot reads as someone speaking
+        elif kind == "journal":
             parts.append(anchor_journal.day_digest(self.db_path, now.strftime("%Y-%m-%d")))
         else:
             parts.append("Memories (wakeup bundle):\n" + wakeup_digest(self.handle_tool))
+            bird = anchor_newspaper.status_line(self.db_path)
+            if bird and bird not in parts[-1]:
+                parts.append(bird)
             prev = last_heartbeat(self.db_path)
             if prev:
                 parts.append("Your previous heartbeat, verbatim:\n" + prev)
@@ -240,11 +271,14 @@ class Presence:
 
     def beat(self, kind: str = "heartbeat", now: datetime = None, alarm: dict = None, dry: bool = False) -> dict:
         now = now or datetime.now()
-        system, user = self.system(kind), self.user(kind, now, alarm)
+        self._kind = kind
+        tools = self.tools + ([anchor_room.LEAVE_TOOL] if kind == "room" else [])
+        system, user = self.system(kind), self.user(kind, now, alarm, dry=dry)
         if dry:
-            return {"dry": True, "system": system, "user": user, "tools": [t["name"] for t in self.tools]}
+            return {"dry": True, "system": system, "user": user, "tools": [t["name"] for t in tools]}
         try:
-            res = anchor_agent.run_turn(self.upstream, system, user, self.tools, self._exec, max_turns=self.max_turns)
+            res = anchor_agent.run_turn(self.upstream, system, user, tools, self._exec, max_turns=self.max_turns,
+                                        stop_tools=(anchor_room.LEAVE_TOOL["name"],) if kind == "room" else ())
         except Exception as e:
             log_line(self.db_path, {"kind": kind, "error": f"{type(e).__name__}: {e}"})
             raise
@@ -253,6 +287,15 @@ class Presence:
         if kind == "heartbeat":
             if text:
                 path = append_heartbeat(self.db_path, now, text)
+        elif kind == "room":
+            if text:
+                path = anchor_room.append(self.db_path, now, text)
+                if self.room_store:   # opt-in: also keep the line as a memory, so the chat side can find it by search
+                    try:
+                        label = self.room_name or "room"
+                        self.handle_tool("store_memory", {"text": f"[{label} {now.strftime('%Y-%m-%d %H:%M')}] {text}", "tag": "room"})
+                    except Exception as e:
+                        log_line(self.db_path, {"kind": "room", "error": f"store failed (file kept): {type(e).__name__}: {e}"})
         else:
             wrote = any(t["tool"] == "write_journal" and t["ok"] for t in res["trace"])
             if text and not wrote:
@@ -262,27 +305,67 @@ class Presence:
         st = load_state(self.db_path)
         if kind == "heartbeat":
             st["last_heartbeat_at"] = now.isoformat(timespec="minutes")
+        elif kind == "room":
+            st["last_room_at"] = now.isoformat(timespec="minutes")
         save_state(self.db_path, st)
         if alarm:
             anchor_alarms.mark_fired(self.db_path, alarm["id"], now)
         log_line(self.db_path, {"kind": kind, "alarm": (alarm or {}).get("id"), "turns": res.get("turns"),
                                 "tools": [t["tool"] for t in res["trace"]], "chars": len(text), "stopped": res.get("stopped"),
                                 "file": path})
-        return {"text": text, "trace": res["trace"], "file": path, "turns": res.get("turns")}
+        return {"text": text, "trace": res["trace"], "file": path, "turns": res.get("turns"), "stopped": res.get("stopped")}
 
 
 # ── scheduler ─────────────────────────────────────────────────────────────────
 
-def run_loop(p: Presence, times: list, every_min: int, quiet, journal_at, poll_sec: int = 60):
-    print(f"[presence] running: times={times or '-'} every={every_min or '-'} quiet={quiet} journal_at={journal_at}", flush=True)
+def room_due(p: Presence, now: datetime, st: dict) -> str:
+    """'' when a room beat should run now, else the reason it does not."""
+    if not p.room_every:
+        return "off"
+    hold = st.get("room_hold_until")
+    if hold and now < datetime.fromisoformat(hold):
+        return "holding after a failed beat"
+    last = st.get("last_room_at")
+    if last and (now - datetime.fromisoformat(last)) < timedelta(minutes=p.room_every):
+        return "not yet"
+    if anchor_room.talked_recently(p.db_path, now, p.idle_min):
+        return "in conversation"
+    return ""
+
+
+def paper_tick(db_path: str, now: datetime, paper_at: list, st: dict, fly=None) -> list:
+    """Send the bird for every --paper-at slot that has come (no model needed), then clear expired papers."""
+    out = []
+    for slot in slots_due(now, paper_at, st, key="paper_fired"):
+        try:
+            r = (fly or anchor_newspaper.fly)(db_path)
+            out.append(r)
+            log_line(db_path, {"kind": "newspaper", "file": r.get("path", ""), "items": len(r.get("items") or []), "note": r.get("note", "")})
+        except Exception as e:
+            log_line(db_path, {"kind": "newspaper", "error": f"{type(e).__name__}: {e}"})
+        st2 = load_state(db_path); st2.setdefault("paper_fired", {})[slot] = True; save_state(db_path, st2)
+    if paper_at:
+        try:
+            anchor_newspaper.expire(db_path, now.date())
+        except Exception:
+            pass
+    return out
+
+
+def run_loop(p: Presence, times: list, every_min: int, quiet, journal_at, poll_sec: int = 60, paper_at: list = None):
+    print(f"[presence] running: times={times or '-'} every={every_min or '-'} quiet={quiet} journal_at={journal_at} "
+          f"room_every={p.room_every or '-'} paper_at={paper_at or '-'}", flush=True)
     while True:
         now = datetime.now()
         st = load_state(p.db_path)
         try:
+            if paper_at:
+                for r in paper_tick(p.db_path, now, paper_at, st):
+                    print(f"[presence] newspaper: {r.get('path') or r.get('note')}", flush=True)
             if not is_quiet(now, quiet):
                 for a in anchor_alarms.due(p.db_path, now):
                     print(f"[presence] alarm {a['id']} rings", flush=True)
-                    p.beat("heartbeat", now, alarm=a)
+                    p.beat("room" if a.get("where") == "room" else "heartbeat", now, alarm=a)
                     now = datetime.now()
                 if times:
                     for slot in slots_due(now, times, st):
@@ -299,6 +382,17 @@ def run_loop(p: Presence, times: list, every_min: int, quiet, journal_at, poll_s
                         print(f"[presence] journal (slot {slot})", flush=True)
                         p.beat("journal", now)
                         st = load_state(p.db_path); st.setdefault("journal_fired", {})[slot] = True; save_state(p.db_path, st)
+                if not room_due(p, datetime.now(), load_state(p.db_path)):
+                    print("[presence] room", flush=True)
+                    try:
+                        p.beat("room", datetime.now())
+                    except anchor_agent.NoUpstream:
+                        raise
+                    except Exception:   # a failed beat is not retried every poll: each try is a paid model call
+                        st = load_state(p.db_path)
+                        st["room_hold_until"] = (datetime.now() + timedelta(minutes=15)).isoformat(timespec="minutes")
+                        save_state(p.db_path, st)
+                        raise
         except anchor_agent.NoUpstream as e:
             print(f"[presence] {e}", flush=True)
             return
@@ -308,34 +402,46 @@ def run_loop(p: Presence, times: list, every_min: int, quiet, journal_at, poll_s
 
 
 def build(db_path: str, pinned_dir: str = None, upstream: anchor_agent.Upstream = None, default_min: int = None,
-          max_turns: int = 8) -> Presence:
+          max_turns: int = 8, **room) -> Presence:
     import anchor_mcp
     tools, handle_tool, _mem = anchor_mcp.create_server(db_path, pinned_dir=pinned_dir)
     return Presence(db_path, pinned_dir or os.path.join(db_path, "pinned"), upstream or anchor_agent.Upstream(),
-                    tools, handle_tool, default_min=default_min, max_turns=max_turns)
+                    tools, handle_tool, default_min=default_min, max_turns=max_turns, **room)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Anchor presence: heartbeat, journal, alarms")
+    ap = argparse.ArgumentParser(description="Anchor presence: heartbeat, journal, alarms, room, newspaper")
     ap.add_argument("--db-path", default="./anchor_data")
     ap.add_argument("--pinned-dir", default=None, help="default <db-path>/pinned")
     ap.add_argument("--times", default="", help="heartbeat times, e.g. 07:00,11:00,15:00,19:00,23:00")
     ap.add_argument("--every", type=int, default=0, help="or: a heartbeat every N minutes")
     ap.add_argument("--quiet", default="0-6", help="hours with no beats and no alarms, e.g. 0-6 ('' = none)")
     ap.add_argument("--journal-at", default="", help="daily journal turn, e.g. 23:30")
-    ap.add_argument("--once", choices=["heartbeat", "journal"], help="run one turn now and exit")
+    ap.add_argument("--room-every", type=int, default=0, help="a room beat every N minutes (0 = no room)")
+    ap.add_argument("--room-name", default=os.getenv("ANCHOR_ROOM_NAME", ""), help="what the door sign calls the room")
+    ap.add_argument("--idle-min", type=int, default=20, help="the room waits while the transcript has a line this recent")
+    ap.add_argument("--room-store", action="store_true", help="also store each room line as a memory (tag: room)")
+    ap.add_argument("--paper-at", default="", help="send the bird at these times, e.g. 06:00,18:00 (no model needed)")
+    ap.add_argument("--once", choices=["heartbeat", "journal", "room", "paper"], help="run one turn now and exit")
     ap.add_argument("--dry", action="store_true", help="with --once: print the prompt, call nothing")
     ap.add_argument("--max-turns", type=int, default=8)
     args = ap.parse_args()
     times = parse_times(args.times)
     journal_at = parse_times(args.journal_at)[0] if args.journal_at.strip() else None
     default_min = args.every or (int(24 * 60 / len(times)) if times else None)
+    paper_at = parse_times(args.paper_at)
+    if args.once == "paper":
+        r = anchor_newspaper.fly(args.db_path, dry=args.dry)
+        print(json.dumps({"path": r["path"], "items": [it.get("title") for it in r["items"]], "note": r["note"]}, ensure_ascii=False, indent=1))
+        return
     upstream = anchor_agent.Upstream()
-    if not args.dry and not upstream.ready():
+    needs_model = bool(args.once or times or args.every or journal_at or args.room_every)
+    if needs_model and not args.dry and not upstream.ready():
         print("no upstream model configured: set ANCHOR_UPSTREAM_URL and ANCHOR_UPSTREAM_MODEL "
               "(and ANCHOR_UPSTREAM_KEY if needed). Nothing runs without one.", file=sys.stderr)
         sys.exit(2)
-    p = build(args.db_path, args.pinned_dir, upstream, default_min=default_min, max_turns=args.max_turns)
+    p = build(args.db_path, args.pinned_dir, upstream, default_min=default_min, max_turns=args.max_turns,
+              room_name=args.room_name, room_every=args.room_every or None, idle_min=args.idle_min, room_store=args.room_store)
     if args.once:
         res = p.beat(args.once, dry=args.dry)
         if args.dry:
@@ -344,10 +450,10 @@ def main():
             print(json.dumps({k: v for k, v in res.items() if k != "trace"}, ensure_ascii=False, indent=1))
             print(f"tools called: {[t['tool'] for t in res['trace']]}")
         return
-    if not times and not args.every and not journal_at:
-        print("give --times or --every (and/or --journal-at), or --once", file=sys.stderr)
+    if not times and not args.every and not journal_at and not args.room_every and not paper_at:
+        print("give --times or --every (and/or --journal-at, --room-every, --paper-at), or --once", file=sys.stderr)
         sys.exit(2)
-    run_loop(p, times, args.every, parse_quiet(args.quiet), journal_at)
+    run_loop(p, times, args.every, parse_quiet(args.quiet), journal_at, paper_at=paper_at)
 
 
 if __name__ == "__main__":
