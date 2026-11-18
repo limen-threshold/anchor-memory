@@ -4,6 +4,7 @@
 
 Most recent first. Each note follows the same shape: what changed, why it matters, what to do about it.
 
+- [v1.33.0 中文](v1.33.0_zh.md) · [English](v1.33.0.md) — 2026-11-17 · Telegram：单向嘴 send_telegram、邮差草稿的 Send/Discard 按钮（不进模型）、可选聊天窗走同一个代理；没配 bot 整件不存在
 - [v1.32.0 中文](v1.32.0_zh.md) · [English](v1.32.0.md) — 2026-11-17 · 邮差：AI 自己的信箱；名册闸、来信不自动起草、回信只存草稿、只有人能发；没配邮箱整件不存在
 - [v1.31.0 中文](v1.31.0_zh.md) · [English](v1.31.0.md) — 2026-11-17 · 小本本四样（零模型）：速记本、永久语录、失败记录、状态文件读数；拒写「贴回来的提示」
 - [v1.30.0 中文](v1.30.0_zh.md) · [English](v1.30.0.md) — 2026-11-17 · 小鸟衔报（按 AI 自己的兴趣文件，没模型也能飞）、房间（看报/想事/和自己说话的一拍，能退席、会让路）、anchor_hub 按日本地页（私匣与 private 段不显示）

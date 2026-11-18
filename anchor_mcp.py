@@ -39,6 +39,7 @@ import anchor_journal
 import anchor_newspaper
 import anchor_notebook
 import anchor_courier
+import anchor_telegram
 import anchor_invite
 
 
@@ -455,6 +456,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
         *anchor_newspaper.TOOL_DEFS,   # v1.30: list/read_newspaper, read/write_interests (the bird itself is anchor_newspaper.py --fly)
         *anchor_notebook.TOOL_DEFS,   # v1.31: memo_jot / memo_edit / read_memo, keep_quote, log_failure / list_failures
         *(anchor_courier.TOOL_DEFS if anchor_courier.enabled() else []),   # v1.32: only when a mailbox is configured
+        *([anchor_telegram.TOOL_DEF] if anchor_telegram.enabled() else []),   # v1.33: only when a bot and a chat id are configured
         {
             "name": "write_session_state",
             "description": "Write your session_state.md — your own rolling state that carries across windows (what's ongoing, decisions made, current threads, mood). This is the ONLY correct way to update it: the current version is archived automatically before the new one is written, and a continuity header is added so future windows read it as their own state, not a message from someone else. Write the COMPLETE current state (not a diff), in first person. Update it when things change materially and when a conversation wraps up.",
@@ -829,6 +831,9 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
             elif name in anchor_newspaper.TOOL_NAMES:   # v1.30: the newspaper basket and the interest file
                 return anchor_newspaper.handle(db_path, name, args)
 
+            elif name in anchor_telegram.TOOL_NAMES:   # v1.33: one-way mouth; the receipt says delivered or NOT delivered
+                return anchor_telegram.handle(db_path, name, args)
+
             elif name in anchor_courier.TOOL_NAMES:   # v1.32: the mailbox; drafts only — sending is the person's command line
                 if not anchor_courier.enabled():
                     return {"error": "mail is not configured on this machine"}
@@ -885,7 +890,7 @@ def create_server(db_path: str = "./anchor_data", pinned_dir: str = None):
     return TOOLS, handle_tool, mem
 
 
-SERVER_VERSION = "1.32.0"
+SERVER_VERSION = "1.33.0"
 # Protocol versions this server speaks. The surface is tools-only, so every
 # revision so far is equivalent for us; we echo the client's pick when we know
 # it, otherwise fall back to the oldest (what stdio always answered).

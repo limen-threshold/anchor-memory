@@ -1,5 +1,7 @@
 # Anchor Memory System
 
+> **v1.33.0：Telegram。** 一只 bot 三个用处（`anchor_telegram.py`，零模型）：`send_telegram` 是 AI 给你发消息的单向嘴（不定时、不配额，回执只说「送到」或「没送到」）；邮差的草稿带 Send / Discard 按钮发给你，按钮由机器处理、永不进模型；可选的聊天窗把你在 bot 里说的话送进**同一个 Anchor 代理**——同一个脑子同一份记忆，只多一扇窗。没配 bot 则整件不存在。[中文说明](docs/release-notes/v1.33.0_zh.md) · [English](docs/release-notes/v1.33.0.md)。
+
 > **v1.32.0：邮差。** AI 自己的信箱（`anchor_courier.py`，IMAP 收、SMTP 发，零模型）。四条规矩：收信只登记；名册里的人写的信它才看得到，陌生人的先扣下等你 `--know`；来信不自动起草，它只看到一行「几封没回」；`write_reply` 只存草稿，**只有你在命令行 `--send` 才真的发**，状态行如实写「实际已发」。没配邮箱则整件不存在。[中文说明](docs/release-notes/v1.32.0_zh.md) · [English](docs/release-notes/v1.32.0.md)。
 
 > **v1.31.0：小本本。** 四样零模型的件：速记本（`memo_jot` 只能追加一行、机器盖日期、同时存成记忆；没划掉的老账会在 wakeup 和心跳前被递回来）、永久语录（`keep_quote`，单独一册进 pinned 层，状态怎么重写都丢不了）、失败记录（`log_failure`，只追加、从不改写记忆，七种类型）、状态文件读数（上次重写几天前、哪些行的「明天」已经过去）。另加一道闸：把系统提示贴回自己文件的写入会被拒。[中文说明](docs/release-notes/v1.31.0_zh.md) · [English](docs/release-notes/v1.31.0.md)。
@@ -306,6 +308,7 @@ Restart Claude Code. Your AI now has these tools:
 - `comment` — leave a comment under a memory (turns memories into dialogue spaces)
 - `graph_stats` — graph-level health
 - `write_journal` / `list_journal` / `read_journal` — the AI's daily journal (v1.29; also written on the presence journal turn)
+- `send_telegram` — the AI's one-way mouth to the person's Telegram (v1.33; only when `ANCHOR_TELEGRAM_TOKEN`/`ANCHOR_TELEGRAM_CHAT_ID` are set)
 - `list_letters` / `read_letter` / `write_reply` / `set_letter_aside` — the AI's mailbox (v1.32; only when `ANCHOR_MAIL_ADDRESS`/`ANCHOR_MAIL_PASSWORD` are set). Replies are drafts; only `anchor_courier.py --send` sends
 - `memo_jot` / `memo_edit` / `read_memo` — a memo for things promised (v1.31): append-only dated lines, also stored as memories, handed back in wakeup while open
 - `keep_quote` — append a sentence to `permanent_quotes.md` in the pinned layer (v1.31)
@@ -573,7 +576,7 @@ This feature was suggested by Veille & 吱吱 based on their single-system archi
 
 ## Release notes
 
-Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.32.0](docs/release-notes/v1.32.0_zh.md) · [English](docs/release-notes/v1.32.0.md) — the courier: the AI's own mailbox, a roster at the door, drafts only, a person sends (anchor_courier). Previous: [v1.31.0](docs/release-notes/v1.31.0_zh.md) · [English](docs/release-notes/v1.31.0.md)
+Per-version notes live in [`docs/release-notes/`](docs/release-notes/). Most recent: [v1.33.0](docs/release-notes/v1.33.0_zh.md) · [English](docs/release-notes/v1.33.0.md) — Telegram: a one-way mouth, the courier's Send/Discard buttons, an opt-in chat window through the same proxy (anchor_telegram). Previous: [v1.32.0](docs/release-notes/v1.32.0_zh.md) · [English](docs/release-notes/v1.32.0.md)
 
 ## Origin
 

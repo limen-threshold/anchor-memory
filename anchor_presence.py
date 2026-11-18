@@ -52,6 +52,7 @@ PRESENCE_TOOLS = (
     "vault_write", "vault_read", "write_journal", "list_journal", "read_journal",
     "memo_jot", "memo_edit", "read_memo", "keep_quote", "log_failure", "list_failures",   # v1.31 (served by the MCP handler)
     "list_letters", "read_letter", "write_reply", "set_letter_aside",   # v1.32 (present only when a mailbox is configured)
+    "send_telegram",   # v1.33 (present only when a bot is configured)
 )
 
 
@@ -226,7 +227,7 @@ class Presence:
                       + list(anchor_newspaper.TOOL_DEFS))
 
     def _exec(self, name: str, args: dict):
-        if name in ("write_session_state", "write_identity_file", "write_journal", "store_memory", "keep_quote", "memo_jot", "write_reply"):
+        if name in ("write_session_state", "write_identity_file", "write_journal", "store_memory", "keep_quote", "memo_jot", "write_reply", "send_telegram"):
             body = " ".join(str((args or {}).get(k) or "") for k in ("content", "text", "quote", "body"))
             if any(m in body for m in SIGN_MARKS):   # v1.31: the door sign pasted into the AI's own files
                 return ("Not written: the text contains this turn's door sign (the machine's description of the turn). "
